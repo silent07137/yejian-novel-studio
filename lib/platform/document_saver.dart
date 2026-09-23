@@ -16,6 +16,36 @@ class DirectoryLinkResult {
   final String? message;
 }
 
+class SystemLinkLauncher {
+  static const _channel = MethodChannel('com.silent07137.yejian/document');
+
+  static Future<bool> open(Uri uri) async {
+    if (uri.scheme != 'https' && uri.scheme != 'http') return false;
+    try {
+      if (Platform.isAndroid) {
+        return await _channel.invokeMethod<bool>('openExternalUrl', {
+              'url': uri.toString(),
+            }) ??
+            false;
+      }
+      final executable = Platform.isWindows
+          ? 'explorer.exe'
+          : Platform.isMacOS
+          ? 'open'
+          : Platform.isLinux
+          ? 'xdg-open'
+          : null;
+      if (executable == null) return false;
+      await Process.start(executable, [
+        uri.toString(),
+      ], mode: ProcessStartMode.detached);
+      return true;
+    } on Exception {
+      return false;
+    }
+  }
+}
+
 class DocumentSaveResult {
   const DocumentSaveResult._(this.status, {this.location, this.message});
 

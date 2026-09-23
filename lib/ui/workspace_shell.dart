@@ -2867,54 +2867,30 @@ class SettingsPage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          Text('个人信息', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 10),
           Card(
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               key: const ValueKey('settings-author-card'),
               onTap: () => controller.openSubpage(WorkspacePage.profile),
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 16,
+                ),
                 child: Row(
                   children: [
-                    _Avatar(profile: profile, size: 72),
-                    const SizedBox(width: 18),
+                    _Avatar(profile: profile, size: 60),
+                    const SizedBox(width: 16),
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            profile.authorName.trim().isEmpty
-                                ? '未命名'
-                                : profile.authorName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            '作者资料',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 14,
-                            runSpacing: 6,
-                            children: [
-                              _AuthorStatLabel(
-                                value: '${data.totalWords}',
-                                label: '累计字数',
-                              ),
-                              _AuthorStatLabel(
-                                value: '${profile.writingDays}',
-                                label: '写作天数',
-                              ),
-                              _AuthorStatLabel(
-                                value: '${data.books.length}',
-                                label: '作品',
-                              ),
-                            ],
-                          ),
-                        ],
+                      child: Text(
+                        profile.authorName.trim().isEmpty
+                            ? '未命名'
+                            : profile.authorName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleLarge,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -2954,22 +2930,6 @@ class SettingsPage extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _AuthorStatLabel extends StatelessWidget {
-  const _AuthorStatLabel({required this.value, required this.label});
-
-  final String value;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      '$value $label',
-      style: Theme.of(context).textTheme.bodySmall
-          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
     );
   }
 }
@@ -3167,8 +3127,19 @@ class ApplicationSettingsPage extends StatelessWidget {
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
-  static const _version = '0.4.0-dev.10 (12)';
+  static const _version = '0.4.0-dev.11 (13)';
   static const _applicationId = 'com.silent07137.yejian_native';
+  static final Uri _projectUri = Uri.parse(
+    'https://github.com/silent07137/yejian-novel-studio',
+  );
+
+  Future<void> _openProject(BuildContext context) async {
+    final opened = await SystemLinkLauncher.open(_projectUri);
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('无法打开项目地址，请检查浏览器设置')));
+    }
+  }
 
   Future<void> _showVersionHistory(BuildContext context) {
     return showDialog<void>(
@@ -3177,6 +3148,9 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.11\n'
+            '· 精简设置页作者卡片\n'
+            '· 增加项目仓库入口\n\n'
             '0.4.0-dev.10\n'
             '· 悬浮底栏上滑收起、下滑显示\n'
             '· 开源许可统一为 GPL-2.0-only\n\n'
@@ -3294,6 +3268,44 @@ class AboutPage extends StatelessWidget {
                   onTap: () => _showAppLicense(context),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text(
+            '项目',
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(color: scheme.primary),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: ListTile(
+              key: const ValueKey('open-project-repository'),
+              minVerticalPadding: 14,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 4,
+              ),
+              leading: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.code_rounded,
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+              title: const Text('GitHub'),
+              subtitle: Text(
+                _projectUri.toString(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => _openProject(context),
             ),
           ),
           const SizedBox(height: 22),

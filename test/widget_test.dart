@@ -109,9 +109,13 @@ void main() {
       Alignment.centerRight,
     );
     expect(controller.page, WorkspacePage.settings);
+    expect(find.text('个人信息'), findsOneWidget);
     expect(find.byKey(const ValueKey('settings-author-card')), findsOneWidget);
+    expect(find.text('作者资料'), findsNothing);
+    expect(find.textContaining('累计字数'), findsNothing);
     expect(find.text('应用设置'), findsOneWidget);
     expect(find.text('关于应用'), findsOneWidget);
+    expect(find.text('项目'), findsNothing);
     expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
   });
 
@@ -530,8 +534,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.page, WorkspacePage.about);
-    expect(find.text('0.4.0-dev.10 (12)'), findsOneWidget);
+    expect(find.text('0.4.0-dev.11 (13)'), findsOneWidget);
     expect(find.text('GPL-2.0-only'), findsOneWidget);
+    expect(find.text('项目'), findsOneWidget);
+    expect(find.text('GitHub'), findsOneWidget);
+    expect(
+      find.text('https://github.com/silent07137/yejian-novel-studio'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('open-project-repository')),
+      findsOneWidget,
+    );
     expect(find.text('数据与隐私'), findsOneWidget);
     expect(find.text('第三方开源许可'), findsOneWidget);
     expect(find.byKey(const ValueKey('app-nav-settings')), findsOneWidget);

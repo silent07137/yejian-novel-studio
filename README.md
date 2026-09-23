@@ -2,7 +2,7 @@
 
 页间是面向长篇创作的本地优先写作工具，使用 Flutter 原生渲染 Android 与 Windows 界面，不以网页或 WebView 作为应用主体。
 
-当前源码是按《页间双端开发手册 v1.0》持续重做的 `0.4.0-dev.10` 开发版本，不是完成版。真实进度与未完成项见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
+当前源码是按《页间双端开发手册 v1.0》持续重做的 `0.4.0-dev.11` 开发版本，不是完成版。真实进度与未完成项见 [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md)。
 
 ## 当前基础
 

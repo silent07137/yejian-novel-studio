@@ -1,6 +1,7 @@
 package com.silent07137.yejian_native
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -28,9 +29,33 @@ class MainActivity : FlutterActivity() {
                     "clearLinkedExportDirectory" -> clearLinkedDirectory(result)
                     "linkExportDirectory" -> linkExportDirectory(result)
                     "saveDocument" -> saveDocument(call, result)
+                    "openExternalUrl" -> openExternalUrl(call, result)
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun openExternalUrl(
+        call: io.flutter.plugin.common.MethodCall,
+        result: MethodChannel.Result
+    ) {
+        val value = call.argument<String>("url")
+        val uri = value?.let(Uri::parse)
+        if (uri == null || uri.scheme?.lowercase() !in setOf("http", "https")) {
+            result.success(false)
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        try {
+            startActivity(intent)
+            result.success(true)
+        } catch (_: ActivityNotFoundException) {
+            result.success(false)
+        } catch (_: SecurityException) {
+            result.success(false)
+        }
     }
 
     private fun preferences() = getSharedPreferences(preferencesName, MODE_PRIVATE)
