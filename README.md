@@ -129,6 +129,13 @@ flutter build windows --release
 
 Windows MSI 脚本位于 `tool/build_windows_msi.ps1`。该流程仍处于实验阶段，发布前需要重新核对版本号、升级策略和签名。
 
+## GitHub Actions 与 Beta 发布
+
+- `CI`：推送到 `main` 或创建 Pull Request 时自动运行 `flutter analyze` 和 `flutter test`。
+- `Android Beta`：从 Actions 页面手动触发，使用仓库 Secrets 中的发行密钥构建签名 APK，并创建 GitHub Pre-release。
+
+首次发布前需要创建并备份 Android 发行密钥，再配置四个仓库 Secrets。完整步骤见 [Android Beta 发布说明](docs/RELEASING.md)。
+
 ## 数据与隐私
 
 - 作品、正文、角色、世界观和情节资料默认保存在设备本地。
