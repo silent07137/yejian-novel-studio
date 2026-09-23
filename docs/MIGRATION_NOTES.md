@@ -1,0 +1,28 @@
+# 数据迁移说明
+
+## 0.3.x JSON → 0.4.x SQLite
+
+旧版主数据位于应用支持目录 `yejian/library.json`。0.4.x 第一次启动时：
+
+1. 创建 `yejian/yejian.db`，开启外键、忙等待和桌面 WAL。
+2. 若迁移记录不存在且旧 JSON 可解析，在一个 SQLite 事务内导入资料、作品、章节与设定。
+3. 写入 `legacy-library-json-v1` 迁移记录，后续启动不重复导入。
+4. 原 `library.json` 保留，不删除、不重命名、不覆盖。
+
+如果旧 JSON 损坏或结构无法识别，迁移不会写入“成功”记录，也不会用空书架覆盖源文件。后续恢复工具仍可读取原件。
+
+## 降级注意
+
+0.4.x 启动后只更新 SQLite。若降级安装 0.3.x，旧程序只能看到迁移时保留的 JSON，因此内容会停留在旧时间点。完成真实升级/降级验证前，不把 0.4.x 标为稳定发布版。
+
+## 数据库 v1
+
+- `app_profile`、`app_settings`：设备级资料与设置。
+- `projects`、`volumes`、`chapters`：作品目录与正文。
+- `structured_entities`：角色、世界观、时间线、事件、关系、伏笔、灵感。
+- `entity_revisions`：实体修订快照。
+- `drafts`：显式草稿预留表。
+- `attachments`：按内容哈希管理附件的索引表。
+- `migration_log`：幂等迁移记录。
+
+删除采用 `deleted_at` 软删除；当前 UI 尚未提供完整回收与恢复流程。

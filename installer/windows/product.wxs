@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="页间"
+    Language="2052"
+    Version="0.2.0"
+    Manufacturer="silent07137"
+    UpgradeCode="D6C4DB3F-49DF-4D0A-A322-BBC241E7E474">
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Platform="x64"
+      Description="页间本地写作工具" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="已安装更新版本的页间。"
+      Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPPRODUCTICON" Value="YejianIcon" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.ProjectDir)\installer\windows\license.rtf" />
+    <Icon Id="YejianIcon" SourceFile="$(var.SourceDir)\yejian.exe" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="页间">
+          <Component Id="ApplicationShortcuts" Guid="*" Win64="yes">
+            <Shortcut
+              Id="StartMenuShortcut"
+              Directory="ProgramMenuFolder"
+              Name="页间"
+              Description="页间本地写作工具"
+              Target="[INSTALLFOLDER]yejian.exe"
+              WorkingDirectory="INSTALLFOLDER"
+              Icon="YejianIcon" />
+            <Shortcut
+              Id="DesktopShortcut"
+              Directory="DesktopFolder"
+              Name="页间"
+              Description="页间本地写作工具"
+              Target="[INSTALLFOLDER]yejian.exe"
+              WorkingDirectory="INSTALLFOLDER"
+              Icon="YejianIcon" />
+            <RegistryValue
+              Root="HKCU"
+              Key="Software\silent07137\Yejian"
+              Name="Installed"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <Feature Id="MainFeature" Title="页间" Level="1" Absent="disallow">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="ApplicationShortcuts" />
+    </Feature>
+
+    <UIRef Id="WixUI_InstallDir" />
+  </Product>
+</Wix>
