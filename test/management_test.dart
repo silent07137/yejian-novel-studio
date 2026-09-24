@@ -16,6 +16,48 @@ class _MemoryStore implements DataStore {
 }
 
 void main() {
+  test('正文标注随编辑移动，删除关联资料时清理引用', () {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: _MemoryStore(data), data: data);
+    final book = controller.activeBook!;
+    final chapter = controller.activeChapter!;
+    final clue = book.clues.first;
+    final idea = book.notes.first;
+    final revision = controller.addChapterMarker(
+      start: 0,
+      end: 4,
+      kind: 'revision',
+      note: '待推敲',
+    )!;
+    final clueMarker = controller.addChapterMarker(
+      start: 5,
+      end: 9,
+      kind: 'clue',
+      note: '',
+      referenceId: clue.id,
+    )!;
+    controller.addChapterMarker(
+      start: 10,
+      end: 12,
+      kind: 'idea',
+      note: '',
+      referenceId: idea.id,
+    );
+
+    controller.updateChapterBody('引子：${chapter.body}');
+    expect(revision.start, 3);
+    expect(clueMarker.start, 8);
+    controller.updateChapterMarker(revision.id, '再改一遍');
+    expect(revision.note, '再改一遍');
+    controller.deleteClue(clue.id);
+    expect(chapter.markers.where((item) => item.kind == 'clue'), isEmpty);
+    controller.deleteNote(idea.id);
+    expect(chapter.markers.where((item) => item.kind == 'idea'), isEmpty);
+    expect(chapter.markers.single.id, revision.id);
+    controller.deleteChapterMarker(revision.id);
+    expect(chapter.markers, isEmpty);
+  });
+
   test('分卷删除可保留卷内章节，章节状态可编辑', () {
     final data = LibraryData.seeded(profileSetupComplete: true);
     final controller = AppController(store: _MemoryStore(data), data: data);

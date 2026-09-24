@@ -1284,6 +1284,17 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                         ),
                       ),
                       Chip(label: Text(resolved ? '已回收' : '已埋设')),
+                      IconButton(
+                        key: ValueKey('delete-clue-${clue.id}'),
+                        tooltip: '删除伏笔',
+                        onPressed: () => _confirmPlanningDelete(
+                          context,
+                          title: '删除伏笔？',
+                          name: clue.title,
+                          onDelete: () => widget.controller.deleteClue(clue.id),
+                        ),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                      ),
                     ],
                   ),
                   if (clue.description.isNotEmpty) ...[
@@ -1320,9 +1331,26 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
-                      Icons.lightbulb_outline_rounded,
-                      color: Theme.of(context).colorScheme.primary,
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.lightbulb_outline_rounded,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          key: ValueKey('delete-note-${note.id}'),
+                          tooltip: '删除灵感',
+                          onPressed: () => _confirmPlanningDelete(
+                            context,
+                            title: '删除灵感？',
+                            name: note.body,
+                            onDelete: () =>
+                                widget.controller.deleteNote(note.id),
+                          ),
+                          icon: const Icon(Icons.delete_outline_rounded),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
                     Text(note.body),
@@ -1333,6 +1361,34 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
           )
           .toList(),
     );
+  }
+
+  Future<void> _confirmPlanningDelete(
+    BuildContext context, {
+    required String title,
+    required String name,
+    required VoidCallback onDelete,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(
+          '“${name.length > 60 ? '${name.substring(0, 60)}…' : name}”删除后无法恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) onDelete();
   }
 
   Future<void> _showTrackDialog(

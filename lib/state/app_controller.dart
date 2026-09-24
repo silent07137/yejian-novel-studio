@@ -382,6 +382,18 @@ class AppController extends ChangeNotifier {
       status: '草稿',
       exportEnabled: source.exportEnabled,
       sortIndex: index + 1,
+      markers: [
+        for (final marker in source.markers)
+          ChapterMarker(
+            id: newEntityId('marker'),
+            kind: marker.kind,
+            start: marker.start,
+            end: marker.end,
+            quote: marker.quote,
+            note: marker.note,
+            referenceId: marker.referenceId,
+          ),
+      ],
     );
     book.chapters.insert(index + 1, copy);
     selectedChapterId = copy.id;
@@ -752,17 +764,18 @@ class AppController extends ChangeNotifier {
     _touchBook();
   }
 
-  void createClue(
+  String? createClue(
     String title,
     String description, {
     String? originChapterId,
     String? plannedChapterId,
   }) {
     final book = activeBook;
-    if (book == null) return;
+    if (book == null) return null;
+    final clueId = newEntityId('clue');
     book.clues.add(
       PlotClue(
-        id: newEntityId('clue'),
+        id: clueId,
         title: title.trim().isEmpty ? '未命名伏笔' : title.trim(),
         description: description.trim(),
         originChapterId: originChapterId,
@@ -770,26 +783,95 @@ class AppController extends ChangeNotifier {
       ),
     );
     _touchBook();
+    return clueId;
   }
 
   void deleteClue(String clueId) {
     final book = activeBook;
     if (book == null) return;
     book.clues.removeWhere((clue) => clue.id == clueId);
+    for (final chapter in book.chapters) {
+      chapter.markers.removeWhere(
+        (marker) => marker.kind == 'clue' && marker.referenceId == clueId,
+      );
+    }
     _touchBook();
   }
 
-  void createNote(String body) {
+  String? createNote(String body) {
     final book = activeBook;
-    if (book == null || body.trim().isEmpty) return;
-    book.notes.insert(0, IdeaNote(id: newEntityId('note'), body: body.trim()));
+    if (book == null || body.trim().isEmpty) return null;
+    final noteId = newEntityId('note');
+    book.notes.insert(0, IdeaNote(id: noteId, body: body.trim()));
     _touchBook();
+    return noteId;
   }
 
   void deleteNote(String noteId) {
     final book = activeBook;
     if (book == null) return;
     book.notes.removeWhere((note) => note.id == noteId);
+    for (final chapter in book.chapters) {
+      chapter.markers.removeWhere(
+        (marker) => marker.kind == 'idea' && marker.referenceId == noteId,
+      );
+    }
+    _touchBook();
+  }
+
+  ChapterMarker? addChapterMarker({
+    required int start,
+    required int end,
+    required String kind,
+    required String note,
+    String? referenceId,
+  }) {
+    final chapter = activeChapter;
+    final book = activeBook;
+    if (chapter == null ||
+        book == null ||
+        start < 0 ||
+        end > chapter.body.length ||
+        start >= end) {
+      return null;
+    }
+    if (kind == 'clue' && !book.clues.any((clue) => clue.id == referenceId)) {
+      return null;
+    }
+    if (kind == 'idea' && !book.notes.any((idea) => idea.id == referenceId)) {
+      return null;
+    }
+    if (kind != 'revision' && kind != 'clue' && kind != 'idea') return null;
+    final marker = ChapterMarker(
+      id: newEntityId('marker'),
+      kind: kind,
+      start: start,
+      end: end,
+      quote: chapter.body.substring(start, end),
+      note: note.trim(),
+      referenceId: referenceId,
+    );
+    chapter.markers.add(marker);
+    _touchBook();
+    return marker;
+  }
+
+  void updateChapterMarker(String markerId, String note) {
+    final chapter = activeChapter;
+    if (chapter == null) return;
+    for (final marker in chapter.markers) {
+      if (marker.id == markerId) {
+        marker.note = note.trim();
+        _touchBook();
+        return;
+      }
+    }
+  }
+
+  void deleteChapterMarker(String markerId) {
+    final chapter = activeChapter;
+    if (chapter == null) return;
+    chapter.markers.removeWhere((marker) => marker.id == markerId);
     _touchBook();
   }
 
@@ -803,9 +885,45 @@ class AppController extends ChangeNotifier {
   void updateChapterBody(String value) {
     final chapter = activeChapter;
     if (chapter == null) return;
+    if (chapter.body == value) return;
+    _relocateChapterMarkers(chapter.markers, chapter.body, value);
     chapter.body = value;
     chapter.updatedAt = DateTime.now();
     _touchBook();
+  }
+
+  void _relocateChapterMarkers(
+    List<ChapterMarker> markers,
+    String oldText,
+    String newText,
+  ) {
+    var prefix = 0;
+    while (prefix < oldText.length &&
+        prefix < newText.length &&
+        oldText.codeUnitAt(prefix) == newText.codeUnitAt(prefix)) {
+      prefix++;
+    }
+    var suffix = 0;
+    while (suffix < oldText.length - prefix &&
+        suffix < newText.length - prefix &&
+        oldText.codeUnitAt(oldText.length - suffix - 1) ==
+            newText.codeUnitAt(newText.length - suffix - 1)) {
+      suffix++;
+    }
+    final oldChangeEnd = oldText.length - suffix;
+    final delta = newText.length - oldText.length;
+    for (final marker in markers) {
+      if (marker.end <= prefix) continue;
+      if (marker.start >= oldChangeEnd) {
+        marker.start += delta;
+        marker.end += delta;
+        continue;
+      }
+      // Keep the bookmark near the edited passage even when its quote changes.
+      final start = marker.start <= prefix ? marker.start : prefix;
+      marker.start = start.clamp(0, newText.length);
+      marker.end = (marker.end + delta).clamp(marker.start, newText.length);
+    }
   }
 
   void updateAuthorName(String value) {

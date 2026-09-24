@@ -65,14 +65,13 @@ class WorkspaceShell extends StatelessWidget {
                               ),
                             ],
                           )
-                        : hasMobileNavigation
-                        ? _FloatingNavigationHost(
+                        : _FloatingNavigationHost(
                             controller: controller,
                             page: controller.page,
                             bookNavigation: hasMobileBookNavigation,
+                            hasNavigation: hasMobileNavigation,
                             child: _WorkspaceBody(controller: controller),
-                          )
-                        : _WorkspaceBody(controller: controller),
+                          ),
                   ),
                 ),
               ),
@@ -493,12 +492,14 @@ class _FloatingNavigationHost extends StatefulWidget {
     required this.controller,
     required this.page,
     required this.bookNavigation,
+    required this.hasNavigation,
     required this.child,
   });
 
   final AppController controller;
   final WorkspacePage page;
   final bool bookNavigation;
+  final bool hasNavigation;
   final Widget child;
 
   @override
@@ -541,37 +542,38 @@ class _FloatingNavigationHostState extends State<_FloatingNavigationHost> {
           onNotification: _handleUserScroll,
           child: widget.child,
         ),
-        Positioned(
-          key: ValueKey(
-            widget.bookNavigation
-                ? 'floating-book-navigation'
-                : 'floating-app-navigation',
-          ),
-          left: 0,
-          right: 0,
-          bottom: 0,
-          child: IgnorePointer(
-            ignoring: !_navigationVisible,
-            child: ExcludeSemantics(
-              excluding: !_navigationVisible,
-              child: AnimatedSlide(
-                key: ValueKey(
-                  widget.bookNavigation
-                      ? 'floating-book-navigation-motion'
-                      : 'floating-app-navigation-motion',
+        if (widget.hasNavigation)
+          Positioned(
+            key: ValueKey(
+              widget.bookNavigation
+                  ? 'floating-book-navigation'
+                  : 'floating-app-navigation',
+            ),
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: IgnorePointer(
+              ignoring: !_navigationVisible,
+              child: ExcludeSemantics(
+                excluding: !_navigationVisible,
+                child: AnimatedSlide(
+                  key: ValueKey(
+                    widget.bookNavigation
+                        ? 'floating-book-navigation-motion'
+                        : 'floating-app-navigation-motion',
+                  ),
+                  offset: _navigationVisible
+                      ? Offset.zero
+                      : const Offset(0, 1.45),
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  child: widget.bookNavigation
+                      ? _MobileBookNavigation(controller: widget.controller)
+                      : _MobileAppNavigation(controller: widget.controller),
                 ),
-                offset: _navigationVisible
-                    ? Offset.zero
-                    : const Offset(0, 1.45),
-                duration: const Duration(milliseconds: 240),
-                curve: Curves.easeOutCubic,
-                child: widget.bookNavigation
-                    ? _MobileBookNavigation(controller: widget.controller)
-                    : _MobileAppNavigation(controller: widget.controller),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -1880,6 +1882,74 @@ class _ChapterList extends StatelessWidget {
   }
 }
 
+class _MarkedBodyController extends TextEditingController {
+  _MarkedBodyController(this.chapter) : super(text: chapter.body);
+
+  final Chapter chapter;
+
+  void refreshMarkers() => notifyListeners();
+
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    if (chapter.markers.isEmpty) {
+      return super.buildTextSpan(
+        context: context,
+        style: style,
+        withComposing: withComposing,
+      );
+    }
+    if (withComposing &&
+        value.composing.isValid &&
+        !value.composing.isCollapsed) {
+      return super.buildTextSpan(
+        context: context,
+        style: style,
+        withComposing: withComposing,
+      );
+    }
+    final points = <int>{0, text.length};
+    for (final marker in chapter.markers) {
+      points.add(marker.start.clamp(0, text.length));
+      points.add(marker.end.clamp(0, text.length));
+    }
+    final offsets = points.toList()..sort();
+    final color = Theme.of(context).colorScheme.primary;
+    return TextSpan(
+      style: style,
+      children: [
+        for (var index = 0; index < offsets.length - 1; index++)
+          TextSpan(
+            text: text.substring(offsets[index], offsets[index + 1]),
+            style:
+                chapter.markers.any(
+                  (marker) =>
+                      marker.start < offsets[index + 1] &&
+                      marker.end > offsets[index],
+                )
+                ? TextStyle(
+                    backgroundColor: color.withValues(alpha: .12),
+                    decoration: TextDecoration.underline,
+                    decorationColor: color,
+                    decorationThickness: 1.5,
+                  )
+                : null,
+          ),
+      ],
+    );
+  }
+}
+
+typedef _MarkerDraft = ({
+  String kind,
+  String note,
+  String? referenceId,
+  String newReference,
+});
+
 class _EditorPane extends StatefulWidget {
   const _EditorPane({
     super.key,
@@ -1896,7 +1966,7 @@ class _EditorPane extends StatefulWidget {
 
 class _EditorPaneState extends State<_EditorPane> {
   late final TextEditingController _titleController;
-  late final TextEditingController _bodyController;
+  late final _MarkedBodyController _bodyController;
   late final FocusNode _bodyFocusNode;
   late final UndoHistoryController _undoController;
 
@@ -1904,7 +1974,7 @@ class _EditorPaneState extends State<_EditorPane> {
   void initState() {
     super.initState();
     _titleController = TextEditingController(text: widget.chapter.title);
-    _bodyController = TextEditingController(text: widget.chapter.body);
+    _bodyController = _MarkedBodyController(widget.chapter);
     _bodyFocusNode = FocusNode();
     _undoController = UndoHistoryController();
     _titleController.addListener(_commitTitleWhenCompositionEnds);
@@ -1932,16 +2002,34 @@ class _EditorPaneState extends State<_EditorPane> {
         ? -1
         : value.text.lastIndexOf('\n', searchStart);
     final start = lineStart < 0 ? 0 : lineStart + 1;
+    final selectionEnd = selection.isValid && !selection.isCollapsed
+        ? selection.end
+        : offset;
+    final nextBreak = value.text.indexOf('\n', selectionEnd);
+    final end = nextBreak < 0 ? value.text.length : nextBreak;
     const indent = '　　';
     final hasIndent = value.text.startsWith(indent, start);
-    final replacement = hasIndent ? '' : indent;
-    final removeEnd = hasIndent ? start + indent.length : start;
-    final nextText = value.text.replaceRange(start, removeEnd, replacement);
-    final delta = replacement.length - (removeEnd - start);
-    final nextOffset = (offset + delta).clamp(0, nextText.length);
+    final paragraph = value.text.substring(start, end);
+    final lines = paragraph.split('\n');
+    final nextParagraph = lines
+        .map(
+          (line) => hasIndent
+              ? (line.startsWith(indent) ? line.substring(indent.length) : line)
+              : '$indent$line',
+        )
+        .join('\n');
+    final nextText = value.text.replaceRange(start, end, nextParagraph);
+    final delta = nextParagraph.length - paragraph.length;
+    final nextOffset = (offset + (hasIndent ? -indent.length : indent.length))
+        .clamp(0, nextText.length);
     _bodyController.value = value.copyWith(
       text: nextText,
-      selection: TextSelection.collapsed(offset: nextOffset),
+      selection: selection.isValid && !selection.isCollapsed
+          ? TextSelection(
+              baseOffset: nextOffset,
+              extentOffset: (selection.end + delta).clamp(0, nextText.length),
+            )
+          : TextSelection.collapsed(offset: nextOffset),
       composing: TextRange.empty,
     );
   }
@@ -2154,6 +2242,340 @@ class _EditorPaneState extends State<_EditorPane> {
     }
   }
 
+  Future<void> _addMarker() async {
+    final selection = _bodyController.selection;
+    if (!selection.isValid || selection.isCollapsed) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('请先选中要标注的正文')));
+      return;
+    }
+    final book = widget.controller.activeBook;
+    if (book == null) return;
+    var kind = 'revision';
+    String? referenceId = '__new__';
+    var newReferenceText = selection.textInside(_bodyController.text);
+    var noteText = '';
+    final draft = await showDialog<_MarkerDraft>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('添加正文标注'),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '“${selection.textInside(_bodyController.text)}”',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: kind,
+                    decoration: const InputDecoration(labelText: '类型'),
+                    items: const [
+                      DropdownMenuItem(value: 'revision', child: Text('待修改')),
+                      DropdownMenuItem(value: 'clue', child: Text('伏笔')),
+                      DropdownMenuItem(value: 'idea', child: Text('灵感')),
+                    ],
+                    onChanged: (value) => setDialogState(() {
+                      kind = value ?? 'revision';
+                      referenceId = '__new__';
+                    }),
+                  ),
+                  if (kind != 'revision') ...[
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('marker-reference-$kind'),
+                      initialValue: referenceId,
+                      decoration: InputDecoration(
+                        labelText: kind == 'clue' ? '关联伏笔' : '关联灵感',
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: '__new__',
+                          child: Text(kind == 'clue' ? '新建伏笔' : '新建灵感'),
+                        ),
+                        if (kind == 'clue')
+                          ...book.clues.map(
+                            (clue) => DropdownMenuItem(
+                              value: clue.id,
+                              child: Text(
+                                clue.title,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                        else
+                          ...book.notes.map(
+                            (idea) => DropdownMenuItem(
+                              value: idea.id,
+                              child: Text(
+                                idea.body,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) =>
+                          setDialogState(() => referenceId = value),
+                    ),
+                    if (referenceId == '__new__') ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        initialValue: newReferenceText,
+                        onChanged: (value) => newReferenceText = value,
+                        maxLines: 2,
+                        decoration: InputDecoration(
+                          labelText: kind == 'clue' ? '伏笔名称' : '灵感内容',
+                        ),
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    onChanged: (value) => noteText = value,
+                    maxLines: 3,
+                    decoration: const InputDecoration(labelText: '备注（可随时修改）'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, (
+                kind: kind,
+                note: noteText,
+                referenceId: referenceId,
+                newReference: newReferenceText,
+              )),
+              child: const Text('保存标注'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (draft == null || !mounted) return;
+    String? linkedId = draft.referenceId;
+    if (draft.kind != 'revision' && linkedId == '__new__') {
+      if (draft.newReference.trim().isEmpty) return;
+      linkedId = draft.kind == 'clue'
+          ? widget.controller.createClue(
+              draft.newReference,
+              draft.note,
+              originChapterId: widget.chapter.id,
+            )
+          : widget.controller.createNote(draft.newReference);
+    }
+    final marker = widget.controller.addChapterMarker(
+      start: selection.start,
+      end: selection.end,
+      kind: draft.kind,
+      note: draft.note,
+      referenceId: draft.kind == 'revision' ? null : linkedId,
+    );
+    if (marker != null) _bodyController.refreshMarkers();
+    _bodyFocusNode.requestFocus();
+    _bodyController.selection = selection;
+  }
+
+  Future<void> _showMarkers() async {
+    final book = widget.controller.activeBook;
+    final selectedId = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          final markers = widget.chapter.markers.toList()
+            ..sort((a, b) => a.start.compareTo(b.start));
+          return SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * .62,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '正文标注',
+                          style: Theme.of(sheetContext).textTheme.titleLarge,
+                        ),
+                      ),
+                      Text('${markers.length} 处'),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: markers.isEmpty
+                      ? const Center(child: Text('还没有标注。选中正文后点“添加标注”。'))
+                      : ListView.builder(
+                          itemCount: markers.length,
+                          itemBuilder: (context, index) {
+                            final marker = markers[index];
+                            final kindLabel = switch (marker.kind) {
+                              'clue' => '伏笔',
+                              'idea' => '灵感',
+                              _ => '待修改',
+                            };
+                            final linkedLabel = switch (marker.kind) {
+                              'clue' =>
+                                book?.clues
+                                    .where(
+                                      (item) => item.id == marker.referenceId,
+                                    )
+                                    .map((item) => item.title)
+                                    .firstOrNull,
+                              'idea' =>
+                                book?.notes
+                                    .where(
+                                      (item) => item.id == marker.referenceId,
+                                    )
+                                    .map((item) => item.body)
+                                    .firstOrNull,
+                              _ => null,
+                            };
+                            final details = [
+                              if (linkedLabel?.isNotEmpty == true) linkedLabel!,
+                              if (marker.note.isNotEmpty) marker.note,
+                            ].join(' · ');
+                            return ListTile(
+                              key: ValueKey('chapter-marker-${marker.id}'),
+                              leading: const Icon(
+                                Icons.bookmark_outline_rounded,
+                              ),
+                              title: Text(
+                                '$kindLabel · ${marker.quote}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: details.isEmpty
+                                  ? null
+                                  : Text(
+                                      details,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                              onTap: () =>
+                                  Navigator.pop(sheetContext, marker.id),
+                              trailing: PopupMenuButton<String>(
+                                tooltip: '标注操作',
+                                onSelected: (action) async {
+                                  if (action == 'edit') {
+                                    var revisedText = marker.note;
+                                    final revised = await showDialog<String>(
+                                      context: sheetContext,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text('编辑标注'),
+                                        content: TextFormField(
+                                          initialValue: revisedText,
+                                          onChanged: (value) =>
+                                              revisedText = value,
+                                          autofocus: true,
+                                          maxLines: 3,
+                                          decoration: const InputDecoration(
+                                            labelText: '备注',
+                                          ),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context),
+                                            child: const Text('取消'),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () => Navigator.pop(
+                                              context,
+                                              revisedText,
+                                            ),
+                                            child: const Text('保存'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (revised != null) {
+                                      widget.controller.updateChapterMarker(
+                                        marker.id,
+                                        revised,
+                                      );
+                                    }
+                                  } else {
+                                    final confirmed = await showDialog<bool>(
+                                      context: sheetContext,
+                                      builder: (context) => AlertDialog(
+                                        title: const Text('删除标注？'),
+                                        content: const Text(
+                                          '只删除正文中的标注，不删除关联的伏笔或灵感。',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('取消'),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text('删除'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirmed == true) {
+                                      widget.controller.deleteChapterMarker(
+                                        marker.id,
+                                      );
+                                    }
+                                  }
+                                  if (sheetContext.mounted) {
+                                    setSheetState(() {});
+                                  }
+                                  _bodyController.refreshMarkers();
+                                },
+                                itemBuilder: (context) => const [
+                                  PopupMenuItem(
+                                    value: 'edit',
+                                    child: Text('编辑备注'),
+                                  ),
+                                  PopupMenuItem(
+                                    value: 'delete',
+                                    child: Text('删除标注'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (!mounted || selectedId == null) return;
+    final marker = widget.chapter.markers
+        .where((item) => item.id == selectedId)
+        .firstOrNull;
+    if (marker == null) return;
+    _bodyFocusNode.requestFocus();
+    _bodyController.selection = TextSelection(
+      baseOffset: marker.start.clamp(0, _bodyController.text.length),
+      extentOffset: marker.end.clamp(0, _bodyController.text.length),
+    );
+  }
+
   @override
   void dispose() {
     _titleController.removeListener(_commitTitleWhenCompositionEnds);
@@ -2221,6 +2643,38 @@ class _EditorPaneState extends State<_EditorPane> {
                 Text(
                   '${widget.chapter.wordCount} 字',
                   style: Theme.of(context).textTheme.bodySmall,
+                ),
+                IconButton(
+                  key: const ValueKey('add-chapter-marker'),
+                  tooltip: '添加标注',
+                  onPressed: _addMarker,
+                  icon: const Icon(Icons.bookmark_add_outlined),
+                ),
+                IconButton(
+                  key: const ValueKey('open-chapter-markers'),
+                  tooltip: '正文标注',
+                  onPressed: _showMarkers,
+                  icon: const Icon(Icons.bookmarks_outlined),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: '段落设置',
+                  icon: const Icon(Icons.format_align_left_rounded),
+                  onSelected: (value) {
+                    if (value == 'indent') {
+                      _toggleIndent();
+                    } else if (value.startsWith('line:')) {
+                      widget.controller.updateLineHeight(
+                        double.parse(value.substring(5)),
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'indent', child: Text('切换首行缩进')),
+                    PopupMenuDivider(),
+                    PopupMenuItem(value: 'line:1.4', child: Text('行距 · 1.4 倍')),
+                    PopupMenuItem(value: 'line:1.6', child: Text('行距 · 1.6 倍')),
+                    PopupMenuItem(value: 'line:1.8', child: Text('行距 · 1.8 倍')),
+                  ],
                 ),
               ],
             ),
@@ -2290,6 +2744,7 @@ class _EditorPaneState extends State<_EditorPane> {
               onIndent: _toggleIndent,
               onResearch: _showResearch,
               onIdea: _captureIdea,
+              onMarker: _addMarker,
             ),
         ],
       ),
@@ -2303,12 +2758,14 @@ class _EditorKeyboardToolbar extends StatelessWidget {
     required this.onIndent,
     required this.onResearch,
     required this.onIdea,
+    required this.onMarker,
   });
 
   final UndoHistoryController undoController;
   final VoidCallback onIndent;
   final VoidCallback onResearch;
   final VoidCallback onIdea;
+  final VoidCallback onMarker;
 
   @override
   Widget build(BuildContext context) {
@@ -2348,6 +2805,11 @@ class _EditorKeyboardToolbar extends StatelessWidget {
                   tooltip: '记灵感',
                   onPressed: onIdea,
                   icon: const Icon(Icons.lightbulb_outline_rounded),
+                ),
+                IconButton(
+                  tooltip: '添加标注',
+                  onPressed: onMarker,
+                  icon: const Icon(Icons.bookmark_add_outlined),
                 ),
               ],
             ),
@@ -3228,7 +3690,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.14 (16)';
+  static const _version = '0.4.0-dev.15 (17)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -3255,6 +3717,10 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.15\n'
+            '· 作品打开与返回恢复页面切换动画\n'
+            '· 伏笔和灵感支持删除\n'
+            '· 正文标注可定位、编辑，并关联伏笔或灵感\n\n'
             '0.4.0-dev.14\n'
             '· 关于应用新增 GitHub Issues 与 Microsoft Forms 反馈入口\n'
             '· 单本书内菜单改为悬浮胶囊，支持滚动显隐\n\n'

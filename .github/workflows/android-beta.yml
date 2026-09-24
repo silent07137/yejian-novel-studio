@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.14）
+        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.15）
         required: true
-        default: v0.4.0-dev.14
+        default: v0.4.0-dev.15
         type: string
 
 permissions:

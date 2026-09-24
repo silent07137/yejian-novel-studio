@@ -41,6 +41,135 @@ void main() {
     expect(data.profile.authorName, '未命名');
   });
 
+  testWidgets('从书架打开作品保留页面切换动画', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pump();
+    expect(find.text('我的书架'), findsOneWidget);
+    expect(find.text('章节目录'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.text('我的书架'), findsNothing);
+    expect(find.text('章节目录'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('伏笔与灵感可确认删除，取消不删除', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.timeline);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final clueId = controller.activeBook!.clues.first.id;
+    final noteId = controller.activeBook!.notes.first.id;
+    await tester.tap(find.text('伏笔').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('delete-clue-$clueId')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(
+      controller.activeBook!.clues.any((item) => item.id == clueId),
+      isTrue,
+    );
+    await tester.tap(find.byKey(ValueKey('delete-clue-$clueId')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+    expect(
+      controller.activeBook!.clues.any((item) => item.id == clueId),
+      isFalse,
+    );
+
+    await tester.tap(find.text('灵感').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('delete-note-$noteId')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+    expect(
+      controller.activeBook!.notes.any((item) => item.id == noteId),
+      isFalse,
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('正文选区可创建标注并从列表定位', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = tester
+        .widget<TextField>(find.byType(TextField).last)
+        .controller!;
+    body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    await tester.tap(find.byKey(const ValueKey('add-chapter-marker')));
+    await tester.pumpAndSettle();
+    expect(find.text('添加正文标注'), findsOneWidget);
+    await tester.tap(find.text('保存标注'));
+    await tester.pumpAndSettle();
+    expect(controller.activeChapter!.markers, hasLength(1));
+    expect(controller.activeChapter!.markers.single.quote, '入秋后的');
+
+    await tester.tap(find.byKey(const ValueKey('open-chapter-markers')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('待修改 · 入秋后的'), findsOneWidget);
+    await tester.tap(find.textContaining('待修改 · 入秋后的'));
+    await tester.pumpAndSettle();
+    expect(body.selection, const TextSelection(baseOffset: 0, extentOffset: 4));
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('段落菜单可切换首行缩进与行距', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = tester
+        .widget<TextField>(find.byType(TextField).last)
+        .controller!;
+    body.selection = const TextSelection.collapsed(offset: 0);
+    await tester.tap(find.byTooltip('段落设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('切换首行缩进'));
+    await tester.pumpAndSettle();
+    expect(body.text, startsWith('　　入秋后'));
+
+    await tester.tap(find.byTooltip('段落设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('行距 · 1.4 倍'));
+    await tester.pumpAndSettle();
+    expect(controller.data.settings.lineHeight, 1.4);
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
   testWidgets('移动端全局书架使用书架与设置双项导航', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;

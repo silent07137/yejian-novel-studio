@@ -282,6 +282,15 @@ class SqliteStore implements DataStore {
         grouped.putIfAbsent(type, () => []).add(payload);
       }
     }
+    final markersByChapter = <String, List<ChapterMarker>>{};
+    for (final payload
+        in grouped['chapter_marker'] ?? const <Map<String, dynamic>>[]) {
+      final chapterId = payload['chapterId'] as String?;
+      if (chapterId == null) continue;
+      markersByChapter
+          .putIfAbsent(chapterId, () => [])
+          .add(ChapterMarker.fromJson(payload));
+    }
     return Book(
       id: projectId,
       title: row['title']! as String,
@@ -310,6 +319,7 @@ class SqliteStore implements DataStore {
               status: item['status'] as String? ?? '草稿',
               exportEnabled: (item['export_enabled'] as int? ?? 1) == 1,
               sortIndex: item['sort_index'] as int? ?? 0,
+              markers: markersByChapter[item['id']],
               updatedAt: DateTime.tryParse(item['updated_at'] as String? ?? ''),
             ),
           )
@@ -517,6 +527,11 @@ class SqliteStore implements DataStore {
     );
     await _saveStructured(txn, book.id, 'clue', book.clues, (v) => v.toJson());
     await _saveStructured(txn, book.id, 'note', book.notes, (v) => v.toJson());
+    await _saveStructured(txn, book.id, 'chapter_marker', [
+      for (final chapter in book.chapters)
+        for (final marker in chapter.markers)
+          {...marker.toJson(), 'chapterId': chapter.id},
+    ], (value) => value);
   }
 
   Future<void> _saveStructured<T>(

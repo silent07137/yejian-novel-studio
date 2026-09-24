@@ -34,6 +34,16 @@ void main() {
               title: '第一章',
               volumeId: volume.id,
               body: '正文不会只存在内存里。',
+              markers: [
+                ChapterMarker(
+                  id: 'marker-1',
+                  kind: 'revision',
+                  start: 0,
+                  end: 2,
+                  quote: '正文',
+                  note: '这里待改',
+                ),
+              ],
             ),
           ],
           roles: [
@@ -93,6 +103,7 @@ void main() {
     final restored = await store.load();
 
     expect(restored.books.single.title, '离线测试');
+    expect(restored.books.single.chapters.single.markers.single.note, '这里待改');
     expect(restored.books.single.volumes.single.id, 'volume-1');
     expect(restored.books.single.chapters.single.body, '正文不会只存在内存里。');
     expect(restored.books.single.roles.first.name, '林照');

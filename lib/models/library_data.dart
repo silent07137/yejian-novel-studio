@@ -88,8 +88,10 @@ class Chapter {
     this.status = '草稿',
     this.exportEnabled = true,
     this.sortIndex = 0,
+    List<ChapterMarker>? markers,
     DateTime? updatedAt,
-  }) : updatedAt = updatedAt ?? DateTime.now();
+  }) : markers = markers ?? [],
+       updatedAt = updatedAt ?? DateTime.now();
 
   String id;
   String title;
@@ -99,6 +101,7 @@ class Chapter {
   String status;
   bool exportEnabled;
   int sortIndex;
+  List<ChapterMarker> markers;
   DateTime updatedAt;
 
   int get wordCount => countWords(body);
@@ -112,6 +115,9 @@ class Chapter {
     status: json['status'] as String? ?? '草稿',
     exportEnabled: json['exportEnabled'] as bool? ?? true,
     sortIndex: (json['sortIndex'] as num?)?.toInt() ?? 0,
+    markers: (json['markers'] as List<dynamic>? ?? [])
+        .map((item) => ChapterMarker.fromJson(item as Map<String, dynamic>))
+        .toList(),
     updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
   );
 
@@ -124,7 +130,49 @@ class Chapter {
     'status': status,
     'exportEnabled': exportEnabled,
     'sortIndex': sortIndex,
+    'markers': markers.map((marker) => marker.toJson()).toList(),
     'updatedAt': updatedAt.toIso8601String(),
+  };
+}
+
+/// A bookmark in chapter prose. [start] and [end] use Dart string offsets.
+class ChapterMarker {
+  ChapterMarker({
+    required this.id,
+    required this.kind,
+    required this.start,
+    required this.end,
+    required this.quote,
+    this.note = '',
+    this.referenceId,
+  });
+
+  String id;
+  String kind; // revision, clue, idea
+  int start;
+  int end;
+  String quote;
+  String note;
+  String? referenceId;
+
+  factory ChapterMarker.fromJson(Map<String, dynamic> json) => ChapterMarker(
+    id: json['id'] as String,
+    kind: json['kind'] as String? ?? 'revision',
+    start: (json['start'] as num?)?.toInt() ?? 0,
+    end: (json['end'] as num?)?.toInt() ?? 0,
+    quote: json['quote'] as String? ?? '',
+    note: json['note'] as String? ?? '',
+    referenceId: json['referenceId'] as String?,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'kind': kind,
+    'start': start,
+    'end': end,
+    'quote': quote,
+    'note': note,
+    'referenceId': referenceId,
   };
 }
 
