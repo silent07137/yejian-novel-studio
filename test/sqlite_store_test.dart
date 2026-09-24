@@ -122,6 +122,22 @@ void main() {
     final revised = await store.load();
     expect(revised.books.single.title, '离线测试（修订）');
     expect(revised.books.single.chapters.single.body, '第二次事务保存。');
+
+    data.books.single.roles.addAll([
+      RoleCard(id: 'role-3', name: '苏晚'),
+      RoleCard(id: 'role-4', name: '顾舟'),
+    ]);
+    await store.save(data);
+    data.books.single.roles[2].description = '填写完整的角色简介';
+    await store.save(data);
+    final rolesAfterEdit = (await store.load()).books.single.roles;
+    expect(rolesAfterEdit.map((role) => role.id).toList(), [
+      'role-1',
+      'role-2',
+      'role-3',
+      'role-4',
+    ]);
+    expect(rolesAfterEdit[2].description, '填写完整的角色简介');
   });
 
   test('章节修订号阻止旧版本覆盖新正文', () async {

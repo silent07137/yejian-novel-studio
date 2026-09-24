@@ -423,6 +423,49 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('多张角色卡时新建入口始终可见，连续创建不覆盖已有角色', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    final originalIds = controller.activeBook!.roles
+        .map((role) => role.id)
+        .toSet();
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+
+    for (final name in ['苏晚', '顾舟']) {
+      final create = find.byKey(const ValueKey('create-setting-entry'));
+      expect(create.hitTestable(), findsOneWidget);
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('field-姓名 *')), name);
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      expect(
+        originalIds.difference(
+          controller.activeBook!.roles.map((role) => role.id).toSet(),
+        ),
+        isEmpty,
+      );
+    }
+
+    expect(controller.activeBook!.roles.length, 4);
+    expect(
+      find.byKey(const ValueKey('create-setting-entry')).hitTestable(),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('手机作品目录支持长按多选管理', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;

@@ -27,6 +27,24 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
     return Column(
       children: [
         const _FixedPageHeader(title: '人物与世界', subtitle: '共用基础模板，写下各自的不同。'),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1040),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('create-setting-entry'),
+                  onPressed: () =>
+                      _tab == 0 ? _createRole(context) : _createWorld(context),
+                  icon: const Icon(Icons.add_rounded),
+                  label: Text(_tab == 0 ? '新建角色卡' : '新建世界观条目'),
+                ),
+              ),
+            ),
+          ),
+        ),
         Expanded(
           child: _PageScroller(
             topPadding: 12,
@@ -58,13 +76,6 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
                     worlds: book.worlds,
                     controller: widget.controller,
                   ),
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: () =>
-                      _tab == 0 ? _createRole(context) : _createWorld(context),
-                  icon: const Icon(Icons.add_rounded),
-                  label: Text(_tab == 0 ? '新建角色卡' : '新建世界观条目'),
-                ),
               ],
             ),
           ),
