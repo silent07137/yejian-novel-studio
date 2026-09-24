@@ -808,7 +808,12 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
         .where((track) => _selectedTracks.contains(track.id))
         .toList();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: EdgeInsets.fromLTRB(
+        12,
+        12,
+        12,
+        76 + MediaQuery.viewPaddingOf(context).bottom,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3219,12 +3224,13 @@ class _PageScroller extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return SingleChildScrollView(
       padding: EdgeInsets.fromLTRB(
         compact ? 16 : 28,
         topPadding ?? (compact ? 16 : 28),
         compact ? 16 : 28,
-        compact ? 24 : 36,
+        compact ? 92 + bottomInset : 36,
       ),
       child: Center(
         child: ConstrainedBox(

@@ -53,7 +53,6 @@ class WorkspaceShell extends StatelessWidget {
                   if (!didPop && controller.canGoBack) controller.goBack();
                 },
                 child: Scaffold(
-                  extendBody: hasMobileBookNavigation,
                   resizeToAvoidBottomInset: true,
                   body: SafeArea(
                     bottom: !hasMobileNavigation,
@@ -66,23 +65,15 @@ class WorkspaceShell extends StatelessWidget {
                               ),
                             ],
                           )
-                        : hasMobileAppNavigation
+                        : hasMobileNavigation
                         ? _FloatingNavigationHost(
                             controller: controller,
                             page: controller.page,
+                            bookNavigation: hasMobileBookNavigation,
                             child: _WorkspaceBody(controller: controller),
                           )
                         : _WorkspaceBody(controller: controller),
                   ),
-                  bottomNavigationBar: hasMobileBookNavigation
-                      ? ColoredBox(
-                          color: Theme.of(context).colorScheme.surface,
-                          child: SafeArea(
-                            top: false,
-                            child: _MobileNavigation(controller: controller),
-                          ),
-                        )
-                      : null,
                 ),
               ),
             );
@@ -290,8 +281,8 @@ class _NavigationTile extends StatelessWidget {
   }
 }
 
-class _MobileNavigation extends StatelessWidget {
-  const _MobileNavigation({required this.controller});
+class _MobileBookNavigation extends StatelessWidget {
+  const _MobileBookNavigation({required this.controller});
 
   final AppController controller;
 
@@ -303,21 +294,105 @@ class _MobileNavigation extends StatelessWidget {
       WorkspacePage.timeline,
       WorkspacePage.export,
     ];
-    return NavigationBar(
-      selectedIndex: pages.indexOf(controller.page).clamp(0, 3),
-      onDestinationSelected: (index) => controller.navigateBook(pages[index]),
-      destinations: const [
-        NavigationDestination(icon: Icon(Icons.edit_note_rounded), label: '写作'),
-        NavigationDestination(
-          icon: Icon(Icons.collections_bookmark_outlined),
-          label: '设定',
+    final selected = pages.indexOf(controller.page).clamp(0, 3);
+    final scheme = Theme.of(context).colorScheme;
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    final capsuleWidth = (MediaQuery.sizeOf(context).width - 32).clamp(
+      220.0,
+      280.0,
+    );
+    final itemWidth = (capsuleWidth - 8) / pages.length;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset + 8),
+      child: Center(
+        heightFactor: 1,
+        child: SizedBox(
+          key: const ValueKey('book-nav-capsule'),
+          width: capsuleWidth,
+          height: 60,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainer.withValues(alpha: .97),
+              borderRadius: BorderRadius.circular(31),
+              border: Border.all(color: scheme.outlineVariant),
+              boxShadow: [
+                BoxShadow(
+                  color: scheme.shadow.withValues(alpha: .14),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AnimatedPositioned(
+                    key: const ValueKey('book-nav-indicator'),
+                    left: selected * itemWidth,
+                    top: 0,
+                    bottom: 0,
+                    width: itemWidth,
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: scheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(27),
+                      ),
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _AppNavigationItem(
+                          key: const ValueKey('book-nav-writing'),
+                          icon: Icons.edit_note_outlined,
+                          selectedIcon: Icons.edit_note_rounded,
+                          label: '写作',
+                          selected: selected == 0,
+                          onTap: () => controller.navigateBook(pages[0]),
+                        ),
+                      ),
+                      Expanded(
+                        child: _AppNavigationItem(
+                          key: const ValueKey('book-nav-settings'),
+                          icon: Icons.collections_bookmark_outlined,
+                          selectedIcon: Icons.collections_bookmark_rounded,
+                          label: '设定',
+                          selected: selected == 1,
+                          onTap: () => controller.navigateBook(pages[1]),
+                        ),
+                      ),
+                      Expanded(
+                        child: _AppNavigationItem(
+                          key: const ValueKey('book-nav-story'),
+                          icon: Icons.account_tree_outlined,
+                          selectedIcon: Icons.account_tree_rounded,
+                          label: '情节',
+                          selected: selected == 2,
+                          onTap: () => controller.navigateBook(pages[2]),
+                        ),
+                      ),
+                      Expanded(
+                        child: _AppNavigationItem(
+                          key: const ValueKey('book-nav-export'),
+                          icon: Icons.ios_share_outlined,
+                          selectedIcon: Icons.ios_share_rounded,
+                          label: '导出',
+                          selected: selected == 3,
+                          onTap: () => controller.navigateBook(pages[3]),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
-        NavigationDestination(
-          icon: Icon(Icons.account_tree_outlined),
-          label: '情节',
-        ),
-        NavigationDestination(icon: Icon(Icons.ios_share_rounded), label: '导出'),
-      ],
+      ),
     );
   }
 }
@@ -417,11 +492,13 @@ class _FloatingNavigationHost extends StatefulWidget {
   const _FloatingNavigationHost({
     required this.controller,
     required this.page,
+    required this.bookNavigation,
     required this.child,
   });
 
   final AppController controller;
   final WorkspacePage page;
+  final bool bookNavigation;
   final Widget child;
 
   @override
@@ -435,10 +512,14 @@ class _FloatingNavigationHostState extends State<_FloatingNavigationHost> {
   @override
   void didUpdateWidget(covariant _FloatingNavigationHost oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.page != widget.page) _navigationVisible = true;
+    if (oldWidget.page != widget.page ||
+        oldWidget.bookNavigation != widget.bookNavigation) {
+      _navigationVisible = true;
+    }
   }
 
   bool _handleUserScroll(UserScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
     final shouldShow = switch (notification.direction) {
       ScrollDirection.reverse => false,
       ScrollDirection.forward => true,
@@ -461,7 +542,11 @@ class _FloatingNavigationHostState extends State<_FloatingNavigationHost> {
           child: widget.child,
         ),
         Positioned(
-          key: const ValueKey('floating-app-navigation'),
+          key: ValueKey(
+            widget.bookNavigation
+                ? 'floating-book-navigation'
+                : 'floating-app-navigation',
+          ),
           left: 0,
           right: 0,
           bottom: 0,
@@ -470,13 +555,19 @@ class _FloatingNavigationHostState extends State<_FloatingNavigationHost> {
             child: ExcludeSemantics(
               excluding: !_navigationVisible,
               child: AnimatedSlide(
-                key: const ValueKey('floating-app-navigation-motion'),
+                key: ValueKey(
+                  widget.bookNavigation
+                      ? 'floating-book-navigation-motion'
+                      : 'floating-app-navigation-motion',
+                ),
                 offset: _navigationVisible
                     ? Offset.zero
                     : const Offset(0, 1.45),
                 duration: const Duration(milliseconds: 240),
                 curve: Curves.easeOutCubic,
-                child: _MobileAppNavigation(controller: widget.controller),
+                child: widget.bookNavigation
+                    ? _MobileBookNavigation(controller: widget.controller)
+                    : _MobileAppNavigation(controller: widget.controller),
               ),
             ),
           ),
@@ -2139,7 +2230,14 @@ class _EditorPaneState extends State<_EditorPane> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 820),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(42, 34, 42, 24),
+                  padding: EdgeInsets.fromLTRB(
+                    42,
+                    34,
+                    42,
+                    compact && !keyboardOpen
+                        ? 92 + MediaQuery.viewPaddingOf(context).bottom
+                        : 24,
+                  ),
                   child: Column(
                     children: [
                       TextField(
@@ -2688,6 +2786,7 @@ class _ExportPageState extends State<ExportPage> {
   @override
   Widget build(BuildContext context) {
     return _ContentPage(
+      reserveBookNavigation: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3527,15 +3626,22 @@ class _ProfileStat extends StatelessWidget {
 }
 
 class _ContentPage extends StatelessWidget {
-  const _ContentPage({required this.child});
+  const _ContentPage({required this.child, this.reserveBookNavigation = false});
 
   final Widget child;
+  final bool reserveBookNavigation;
 
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
+    final inset = MediaQuery.viewPaddingOf(context).bottom;
     return SingleChildScrollView(
-      padding: EdgeInsets.all(compact ? 16 : 28),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 16 : 28,
+        compact ? 16 : 28,
+        compact ? 16 : 28,
+        reserveBookNavigation && compact ? 92 + inset : (compact ? 16 : 28),
+      ),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1040),

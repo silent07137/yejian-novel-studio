@@ -216,8 +216,10 @@ void main() {
   testWidgets('书内导航包含写作设定情节导出并支持系统返回', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;
+    tester.view.viewPadding = const FakeViewPadding(bottom: 24);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewPadding);
 
     final data = LibraryData.seeded(profileSetupComplete: true);
     final controller = AppController(store: MemoryStore(data), data: data);
@@ -231,15 +233,32 @@ void main() {
 
     await tester.tap(find.text('写作').last);
     await tester.pumpAndSettle();
-    final destinations = tester
-        .widgetList<NavigationDestination>(find.byType(NavigationDestination))
-        .toList();
-    expect(destinations.map((item) => item.label), ['写作', '设定', '情节', '导出']);
-    expect(find.byType(SafeArea), findsAtLeastNWidgets(2));
+    final capsule = find.byKey(const ValueKey('book-nav-capsule'));
+    expect(capsule, findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(
+      tester.widget<Scaffold>(find.byType(Scaffold)).bottomNavigationBar,
+      isNull,
+    );
+    expect(tester.getSize(capsule).width, lessThanOrEqualTo(280));
+    expect(tester.getSize(capsule).height, 60);
+    expect(tester.getBottomLeft(capsule).dy, lessThanOrEqualTo(915 - 24));
+    for (final key in [
+      'book-nav-writing',
+      'book-nav-settings',
+      'book-nav-story',
+      'book-nav-export',
+    ]) {
+      expect(find.byKey(ValueKey(key)), findsOneWidget);
+    }
 
     await tester.tap(find.text('设定').last);
     await tester.pumpAndSettle();
     expect(controller.page, WorkspacePage.characters);
+    final indicator = tester.widget<AnimatedPositioned>(
+      find.byKey(const ValueKey('book-nav-indicator')),
+    );
+    expect(indicator.left, greaterThan(0));
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
@@ -250,6 +269,43 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.page, WorkspacePage.home);
     expect(find.text('我的书架'), findsOneWidget);
+  });
+
+  testWidgets('书内胶囊随纵向滚动收起和出现', (tester) async {
+    tester.view.physicalSize = const Size(412, 500);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewPadding = const FakeViewPadding(bottom: 20);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewPadding);
+
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    controller.navigateBook(WorkspacePage.characters);
+    await tester.pumpAndSettle();
+
+    final motion = find.byKey(
+      const ValueKey('floating-book-navigation-motion'),
+    );
+    expect(tester.widget<AnimatedSlide>(motion).offset, Offset.zero);
+    await tester.drag(
+      find.byType(SingleChildScrollView).first,
+      const Offset(0, -180),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedSlide>(motion).offset, const Offset(0, 1.45));
+
+    await tester.drag(
+      find.byType(SingleChildScrollView).first,
+      const Offset(0, 180),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<AnimatedSlide>(motion).offset, Offset.zero);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('角色世界观和情节工具限定在当前作品内', (tester) async {
