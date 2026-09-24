@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Beta 标签（必须形如 v0.4.0-dev.11-beta.1）
+        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.14）
         required: true
-        default: v0.4.0-dev.11-beta.1
+        default: v0.4.0-dev.14
         type: string
 
 permissions:
@@ -38,9 +38,9 @@ jobs:
         run: |
           app_version="$(awk '/^version:/ {print $2}' pubspec.yaml)"
           version_name="${app_version%%+*}"
-          expected_prefix="v${version_name}-beta."
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+-beta\.[0-9]+$ ]] || [[ "$RELEASE_TAG" != "$expected_prefix"* ]]; then
-            echo "::error::当前版本为 $app_version，标签必须形如 ${expected_prefix}1"
+          expected_tag="v${version_name}"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]] || [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "::error::当前版本为 $app_version，标签必须为 $expected_tag"
             exit 1
           fi
 

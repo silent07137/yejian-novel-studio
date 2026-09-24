@@ -1,9 +1,12 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yejian_native/data/local_store.dart';
 import 'package:yejian_native/main.dart';
 import 'package:yejian_native/models/library_data.dart';
 import 'package:yejian_native/state/app_controller.dart';
+import 'package:yejian_native/ui/workspace_shell.dart';
 
 class MemoryStore implements DataStore {
   MemoryStore(this.data);
@@ -633,10 +636,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.page, WorkspacePage.about);
-    expect(find.text('0.4.0-dev.11 (13)'), findsOneWidget);
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    final version = RegExp(
+      r'^version:\s*(.+)\+(\d+)$',
+      multiLine: true,
+    ).firstMatch(pubspec)!;
+    expect(
+      find.text('${version.group(1)} (${version.group(2)})'),
+      findsOneWidget,
+    );
     expect(find.text('GPL-2.0-only'), findsOneWidget);
     expect(find.text('项目'), findsOneWidget);
     expect(find.text('GitHub'), findsOneWidget);
+    expect(find.text('问题反馈'), findsOneWidget);
+    expect(find.byKey(const ValueKey('open-github-issues')), findsOneWidget);
+    expect(find.byKey(const ValueKey('open-microsoft-forms')), findsOneWidget);
     expect(
       find.text('https://github.com/silent07137/yejian-novel-studio'),
       findsOneWidget,
@@ -648,6 +662,46 @@ void main() {
     expect(find.text('数据与隐私'), findsOneWidget);
     expect(find.text('第三方开源许可'), findsOneWidget);
     expect(find.byKey(const ValueKey('app-nav-settings')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('问题反馈分别打开 GitHub Issues 和 Microsoft Forms', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final opened = <Uri>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AboutPage(
+            openLink: (uri) async {
+              opened.add(uri);
+              return true;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final issues = find.byKey(const ValueKey('open-github-issues'));
+    await tester.ensureVisible(issues);
+    await tester.pumpAndSettle();
+    await tester.tap(issues);
+    await tester.pumpAndSettle();
+
+    final forms = find.byKey(const ValueKey('open-microsoft-forms'));
+    await tester.ensureVisible(forms);
+    await tester.pumpAndSettle();
+    await tester.tap(forms);
+    await tester.pumpAndSettle();
+
+    expect(opened.map((uri) => uri.toString()), [
+      'https://github.com/silent07137/yejian-novel-studio/issues',
+      'https://forms.cloud.microsoft/r/JJdHgxPRdS',
+    ]);
     expect(tester.takeException(), isNull);
   });
 

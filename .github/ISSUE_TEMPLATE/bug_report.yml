@@ -34,7 +34,7 @@ body:
     attributes:
       label: 页间版本
       description: 可在“设置 → 关于应用”中查看
-      placeholder: 例如 0.4.0-dev.11 (13)
+      placeholder: 例如 0.4.0-dev.14 (16)
     validations:
       required: true
 

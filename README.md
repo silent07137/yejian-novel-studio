@@ -13,7 +13,7 @@
 </p>
 
 > [!IMPORTANT]
-> 页间目前处于 `0.4.0-dev.11` 开发阶段，功能、界面和数据格式仍可能调整。
+> 页间目前处于 `0.4.0-dev.14` 开发阶段，功能、界面和数据格式仍可能调整。
 > 当前 APK 仅用于开发测试，不建议作为唯一写作环境保存重要作品。
 
 ## 项目简介
@@ -133,6 +133,8 @@ Windows MSI 脚本位于 `tool/build_windows_msi.ps1`。该流程仍处于实验
 
 - `CI`：推送到 `main` 或创建 Pull Request 时自动运行 `flutter analyze` 和 `flutter test`。
 - `Android Beta`：从 Actions 页面手动触发，使用仓库 Secrets 中的发行密钥构建签名 APK，并创建 GitHub Pre-release。
+
+预发布标签直接使用应用版本，例如 `v0.4.0-dev.14`；下一版递增为 `v0.4.0-dev.15`，不再在同一开发版本后追加 `-beta.N`。
 
 首次发布前需要创建并备份 Android 发行密钥，再配置四个仓库 Secrets。完整步骤见 [Android Beta 发布说明](docs/RELEASING.md)。
 

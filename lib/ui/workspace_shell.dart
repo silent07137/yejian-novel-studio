@@ -3224,19 +3224,27 @@ class ApplicationSettingsPage extends StatelessWidget {
 }
 
 class AboutPage extends StatelessWidget {
-  const AboutPage({super.key});
+  const AboutPage({super.key, this.openLink = SystemLinkLauncher.open});
 
-  static const _version = '0.4.0-dev.11 (13)';
+  final Future<bool> Function(Uri) openLink;
+
+  static const _version = '0.4.0-dev.14 (16)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
   );
+  static final Uri _issuesUri = Uri.parse(
+    'https://github.com/silent07137/yejian-novel-studio/issues',
+  );
+  static final Uri _formsUri = Uri.parse(
+    'https://forms.cloud.microsoft/r/JJdHgxPRdS',
+  );
 
-  Future<void> _openProject(BuildContext context) async {
-    final opened = await SystemLinkLauncher.open(_projectUri);
+  Future<void> _openExternal(BuildContext context, Uri uri) async {
+    final opened = await openLink(uri);
     if (!opened && context.mounted) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('无法打开项目地址，请检查浏览器设置')));
+          .showSnackBar(const SnackBar(content: Text('无法打开链接，请检查浏览器设置')));
     }
   }
 
@@ -3247,6 +3255,9 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.14\n'
+            '· 关于应用新增 GitHub Issues 与 Microsoft Forms 反馈入口\n'
+            '· 单本书内菜单改为悬浮胶囊，支持滚动显隐\n\n'
             '0.4.0-dev.11\n'
             '· 精简设置页作者卡片\n'
             '· 增加项目仓库入口\n\n'
@@ -3404,7 +3415,34 @@ class AboutPage extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => _openProject(context),
+              onTap: () => _openExternal(context, _projectUri),
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text(
+            '问题反馈',
+            style: Theme.of(context).textTheme.titleMedium
+                ?.copyWith(color: scheme.primary),
+          ),
+          const SizedBox(height: 10),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                ListTile(
+                  key: const ValueKey('open-github-issues'),
+                  title: const Text('GitHub Issues'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openExternal(context, _issuesUri),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  key: const ValueKey('open-microsoft-forms'),
+                  title: const Text('Microsoft Forms'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _openExternal(context, _formsUri),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 22),
