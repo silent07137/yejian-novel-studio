@@ -825,19 +825,29 @@ class Book {
     if (tracks.isEmpty) {
       tracks.add(StoryTrack(id: 'track-${json['id']}-main', name: '故事主线'));
     }
-    final events = (json['events'] as List<dynamic>? ?? [])
+    final eventPayloads = json['events'] as List<dynamic>? ?? [];
+    final events = eventPayloads
         .map((item) => StoryEvent.fromJson(item as Map<String, dynamic>))
         .toList();
     for (var index = 0; index < events.length; index++) {
       final event = events[index];
-      if (event.order == 0) event.order = index + 1;
+      if (!(eventPayloads[index] as Map<String, dynamic>).containsKey(
+        'order',
+      )) {
+        event.order = index + 1;
+      }
       if (event.trackIds.isEmpty) event.trackIds.add(tracks.first.id);
     }
-    final chapters = (json['chapters'] as List<dynamic>? ?? [])
+    final chapterPayloads = json['chapters'] as List<dynamic>? ?? [];
+    final chapters = chapterPayloads
         .map((item) => Chapter.fromJson(item as Map<String, dynamic>))
         .toList();
     for (var index = 0; index < chapters.length; index++) {
-      if (chapters[index].sortIndex == 0) chapters[index].sortIndex = index;
+      if (!(chapterPayloads[index] as Map<String, dynamic>).containsKey(
+        'sortIndex',
+      )) {
+        chapters[index].sortIndex = index;
+      }
     }
     return Book(
       id: json['id'] as String,

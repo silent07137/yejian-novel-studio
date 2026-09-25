@@ -5,9 +5,11 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../data/local_store.dart';
 import '../domain/entity_id.dart';
+import '../domain/project_archive.dart';
 import '../models/library_data.dart';
 import '../platform/document_saver.dart';
 
@@ -31,6 +33,7 @@ class AppController extends ChangeNotifier {
     required this.store,
     required this.data,
     DocumentSaver? documentSaver,
+    this.projectAssetDirectory,
   }) : documentSaver = documentSaver ?? SystemDocumentSaver() {
     selectedBookId =
         data.activeBookId ?? (data.books.isEmpty ? null : data.books.first.id);
@@ -39,6 +42,7 @@ class AppController extends ChangeNotifier {
 
   final DataStore store;
   final DocumentSaver documentSaver;
+  final Directory? projectAssetDirectory;
   LibraryData data;
   WorkspacePage page = WorkspacePage.home;
   SaveState saveState = SaveState.saved;
@@ -1038,46 +1042,212 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  @Deprecated('Legacy JSON format; do not expose as a verified project backup.')
-  Future<String?> exportCurrentBook() async {
+  Future<DocumentSaveResult> exportCurrentBookProject() async {
     final book = activeBook;
-    if (book == null) return null;
+    if (book == null) {
+      return const DocumentSaveResult.failed('当前没有可导出的作品');
+    }
     final name = '${_safeFileName(book.title)}.sns';
-    final location = await getSaveLocation(
-      suggestedName: name,
-      acceptedTypeGroups: const [
-        XTypeGroup(label: '页间单书工程', extensions: ['sns']),
-      ],
-    );
-    if (location == null) return null;
-    final payload = {
-      'format': 'sns',
-      'formatVersion': 1,
-      'exportedAt': DateTime.now().toIso8601String(),
-      'profile': data.profile.toJson(),
-      'book': book.toJson(),
-    };
-    await _writeExport(location.path, payload, name);
-    return location.path;
+    try {
+      await flush();
+      if (saveState == SaveState.failed) {
+        return const DocumentSaveResult.failed('作品尚未成功保存，暂不能导出工程');
+      }
+      final bytes = await ProjectArchive.encode(
+        books: [book],
+        profile: data.profile,
+        isCollection: false,
+      );
+      return await documentSaver.save(
+        bytes: bytes,
+        suggestedName: name,
+        mimeType: 'application/octet-stream',
+        extensions: const ['sns'],
+      );
+    } on ProjectArchiveException catch (error) {
+      return DocumentSaveResult.failed(error.message);
+    }
   }
 
-  @Deprecated('Legacy JSON format; do not expose as a verified project backup.')
-  Future<String?> exportLibrary() async {
-    final location = await getSaveLocation(
-      suggestedName: '页间作品集.snss',
+  Future<DocumentSaveResult> exportLibraryProject() async {
+    if (data.books.isEmpty) {
+      return const DocumentSaveResult.failed('书架中还没有作品');
+    }
+    try {
+      await flush();
+      if (saveState == SaveState.failed) {
+        return const DocumentSaveResult.failed('作品尚未成功保存，暂不能导出工程');
+      }
+      final bytes = await ProjectArchive.encode(
+        books: data.books,
+        profile: data.profile,
+        isCollection: true,
+      );
+      return await documentSaver.save(
+        bytes: bytes,
+        suggestedName: '页间作品集.snss',
+        mimeType: 'application/octet-stream',
+        extensions: const ['snss'],
+      );
+    } on ProjectArchiveException catch (error) {
+      return DocumentSaveResult.failed(error.message);
+    }
+  }
+
+  Future<ProjectArchiveData?> chooseProjectArchive() async {
+    final file = await openFile(
       acceptedTypeGroups: const [
-        XTypeGroup(label: '页间多书工程', extensions: ['snss']),
+        XTypeGroup(
+          label: '页间工程',
+          extensions: ['sns', 'snss'],
+          mimeTypes: [
+            'application/octet-stream',
+            'application/zip',
+            'application/json',
+          ],
+        ),
       ],
     );
-    if (location == null) return null;
-    final payload = {
-      'format': 'snss',
-      'formatVersion': 1,
-      'exportedAt': DateTime.now().toIso8601String(),
-      'library': data.toJson(),
-    };
-    await _writeExport(location.path, payload, '页间作品集.snss');
-    return location.path;
+    if (file == null) return null;
+    if (await file.length() > ProjectArchive.maxArchiveBytes) {
+      throw const ProjectArchiveException('工程文件超过 128 MB，拒绝导入');
+    }
+    return ProjectArchive.decode(await file.readAsBytes(), fileName: file.name);
+  }
+
+  Future<int> importProjectArchive(
+    ProjectArchiveData project, {
+    required bool replaceExisting,
+  }) async {
+    final incomingIds = project.books.map((book) => book.id).toSet();
+    final existingIds = data.books.map((book) => book.id).toSet();
+    if (!replaceExisting && incomingIds.any(existingIds.contains)) {
+      throw const ProjectArchiveException('工程中有已存在的作品，请确认是否替换');
+    }
+    await flush();
+    if (saveState == SaveState.failed) {
+      throw const ProjectArchiveException('当前作品尚未成功保存，已取消导入');
+    }
+    final candidate = LibraryData.fromJson(data.toJson());
+    final createdAssets = <File>[];
+    final restoreProfile =
+        data.books.isEmpty &&
+        data.profile.authorName == '未命名' &&
+        data.profile.avatarPath == null;
+    try {
+      for (final incoming in project.books) {
+        final book = Book.fromJson(incoming.toJson());
+        if (project.covers[book.id] case final Uint8List cover) {
+          book.coverPath = await _storeImportedAsset(
+            cover,
+            project.coverExtensions[book.id] ?? 'bin',
+            createdAssets,
+          );
+        }
+        final index = candidate.books.indexWhere((item) => item.id == book.id);
+        if (index < 0) {
+          candidate.books.add(book);
+        } else {
+          candidate.books[index] = book;
+        }
+      }
+      if (restoreProfile) {
+        candidate.profile = WriterProfile.fromJson(project.profile.toJson());
+        if (project.avatar case final Uint8List avatar) {
+          candidate.profile.avatarPath = await _storeImportedAsset(
+            avatar,
+            project.avatarExtension ?? 'bin',
+            createdAssets,
+          );
+        }
+      }
+      candidate.activeBookId ??= project.books.first.id;
+      _validateProjectEntityIds(candidate.books);
+      await store.save(candidate);
+    } on Object {
+      for (final asset in createdAssets) {
+        if (await asset.exists()) await asset.delete();
+      }
+      rethrow;
+    }
+    data = candidate;
+    selectedBookId = candidate.activeBookId;
+    selectedChapterId = activeBook?.chapters.firstOrNull?.id;
+    _pageHistory.clear();
+    page = WorkspacePage.home;
+    saveState = SaveState.saved;
+    notifyListeners();
+    return project.books.length;
+  }
+
+  Future<String> _storeImportedAsset(
+    Uint8List bytes,
+    String extension,
+    List<File> createdAssets,
+  ) async {
+    final support =
+        projectAssetDirectory ?? await getApplicationSupportDirectory();
+    final directory = Directory(
+      '${support.path}${Platform.pathSeparator}yejian'
+      '${Platform.pathSeparator}imported-assets',
+    );
+    await directory.create(recursive: true);
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}'
+      '${newEntityId('asset')}.$extension',
+    );
+    createdAssets.add(file);
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
+  }
+
+  void _validateProjectEntityIds(List<Book> books) {
+    final ids = <String>{};
+    void check(String type, String id) {
+      if (id.isEmpty || !ids.add('$type:$id')) {
+        throw const ProjectArchiveException('工程数据 ID 与现有作品冲突，已取消导入');
+      }
+    }
+
+    for (final book in books) {
+      check('book', book.id);
+      for (final item in book.volumes) {
+        check('volume', item.id);
+      }
+      for (final item in book.chapters) {
+        check('chapter', item.id);
+        for (final marker in item.markers) {
+          check('chapter_marker', marker.id);
+        }
+      }
+      for (final item in book.roles) {
+        check('role', item.id);
+      }
+      for (final item in book.roleFields) {
+        check('role_field', item.id);
+      }
+      for (final item in book.worlds) {
+        check('world', item.id);
+      }
+      for (final item in book.worldFields) {
+        check('world_field', item.id);
+      }
+      for (final item in book.tracks) {
+        check('track', item.id);
+      }
+      for (final item in book.events) {
+        check('event', item.id);
+      }
+      for (final item in book.storyLinks) {
+        check('story_link', item.id);
+      }
+      for (final item in book.clues) {
+        check('clue', item.id);
+      }
+      for (final item in book.notes) {
+        check('note', item.id);
+      }
+    }
   }
 
   Future<DocumentSaveResult> exportPlainText() async {
@@ -1106,21 +1276,6 @@ class AppController extends ChangeNotifier {
       mimeType: 'text/markdown',
       extensions: const ['md', 'markdown'],
     );
-  }
-
-  Future<void> _writeExport(
-    String path,
-    Map<String, dynamic> payload,
-    String fileName,
-  ) async {
-    const encoder = JsonEncoder.withIndent('  ');
-    final bytes = Uint8List.fromList(utf8.encode(encoder.convert(payload)));
-    final file = XFile.fromData(
-      bytes,
-      mimeType: 'application/json',
-      name: fileName,
-    );
-    await file.saveTo(path);
   }
 
   void _touchBook() {

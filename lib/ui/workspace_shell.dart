@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
+import '../domain/project_archive.dart';
 import '../models/library_data.dart';
 import '../platform/document_saver.dart';
 import '../state/app_controller.dart';
@@ -3498,7 +3499,7 @@ class _ExportPageState extends State<ExportPage> {
   @override
   Widget build(BuildContext context) {
     return _ContentPage(
-      reserveBookNavigation: true,
+      reserveFloatingNavigation: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3576,16 +3577,21 @@ class _ExportPageState extends State<ExportPage> {
           const SizedBox(height: 30),
           Text('工程备份', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 20),
-          const _ExportCard(
+          _ExportCard(
             icon: Icons.inventory_2_outlined,
-            title: '.yejian.zip',
-            text: '可校验的完整工程备份正在重建。',
-            button: '开发中',
-            onPressed: null,
+            title: '单书工程 .sns',
+            text: '保存本书的章节、角色、设定、情节和封面，可在页间重新导入。',
+            button: '保存 .sns',
+            onPressed: widget.controller.activeBook == null
+                ? null
+                : () => _export(
+                    context,
+                    widget.controller.exportCurrentBookProject,
+                  ),
           ),
           const SizedBox(height: 14),
           Text(
-            'EPUB、DOCX、PDF 与完整工程备份尚未开放。',
+            '多书工程 .snss 与工程导入位于设置。EPUB、DOCX、PDF 尚未开放。',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
@@ -3670,11 +3676,93 @@ class SettingsPage extends StatelessWidget {
 
   final AppController controller;
 
+  Future<void> _exportCollection(BuildContext context) async {
+    final result = await controller.exportLibraryProject();
+    if (!context.mounted) return;
+    final message = switch (result.status) {
+      DocumentSaveStatus.saved => '作品集工程已保存：${result.location ?? '系统文档'}',
+      DocumentSaveStatus.cancelled => '已取消保存',
+      DocumentSaveStatus.failed => result.message ?? '工程导出失败',
+    };
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _importProject(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final project = await controller.chooseProjectArchive();
+      if (project == null || !context.mounted) return;
+      final existingIds = controller.data.books.map((book) => book.id).toSet();
+      final conflicts = project.books
+          .where((book) => existingIds.contains(book.id))
+          .toList();
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('导入工程文件'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${project.isCollection ? '多书' : '单书'}工程 · '
+                  '${project.books.length} 本作品',
+                ),
+                const SizedBox(height: 12),
+                for (final book in project.books.take(12))
+                  Text('· ${book.title}（${book.chapters.length} 章）'),
+                if (project.books.length > 12)
+                  Text('另有 ${project.books.length - 12} 本作品'),
+                if (project.isLegacy) ...[
+                  const SizedBox(height: 12),
+                  const Text('旧版 JSON 工程可迁移文字和设定，但原设备图片路径无法恢复。'),
+                ],
+                if (conflicts.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '${conflicts.length} 本同 ID 作品已存在；继续会替换这些作品的当前内容及封面。'
+                    '请先确认已有其他备份。',
+                    style: TextStyle(
+                      color: Theme.of(dialogContext).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(conflicts.isEmpty ? '导入' : '替换并导入'),
+            ),
+          ],
+        ),
+      );
+      if (accepted != true) return;
+      final count = await controller.importProjectArchive(
+        project,
+        replaceExisting: conflicts.isNotEmpty,
+      );
+      messenger.showSnackBar(SnackBar(content: Text('已导入 $count 本作品')));
+    } on ProjectArchiveException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } on Object {
+      messenger.showSnackBar(const SnackBar(content: Text('工程导入失败，原有作品未改变')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = controller.data;
     final profile = data.profile;
     return _ContentPage(
+      reserveFloatingNavigation: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3735,6 +3823,33 @@ class SettingsPage extends StatelessWidget {
                   subtitle: const Text('版本、许可与数据说明'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => controller.openSubpage(WorkspacePage.about),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text('工程文件', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 10),
+          Card(
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                ListTile(
+                  key: const ValueKey('export-library-project'),
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('导出作品集 .snss'),
+                  subtitle: const Text('打包书架中的全部作品'),
+                  onTap: data.books.isEmpty
+                      ? null
+                      : () => _exportCollection(context),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  key: const ValueKey('import-project-archive'),
+                  leading: const Icon(Icons.file_open_outlined),
+                  title: const Text('导入工程文件'),
+                  subtitle: const Text('支持 .sns 与 .snss，导入前预览'),
+                  onTap: () => _importProject(context),
                 ),
               ],
             ),
@@ -3940,7 +4055,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.18 (20)';
+  static const _version = '0.4.0-dev.19 (21)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -3967,6 +4082,9 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.19\n'
+            '· 新增单书 .sns 与多书 .snss 工程导入导出\n'
+            '· 工程文件包含图片并可校验；导入前预览，已有作品需确认替换\n\n'
             '0.4.0-dev.18\n'
             '· 新增可缩放的人物关系图，优化设定详情层级\n'
             '· 修复世界观长文本换行和段号对齐\n\n'
@@ -4390,10 +4508,10 @@ class _ProfileStat extends StatelessWidget {
 }
 
 class _ContentPage extends StatelessWidget {
-  const _ContentPage({required this.child, this.reserveBookNavigation = false});
+  const _ContentPage({required this.child, this.reserveFloatingNavigation = false});
 
   final Widget child;
-  final bool reserveBookNavigation;
+  final bool reserveFloatingNavigation;
 
   @override
   Widget build(BuildContext context) {
@@ -4404,7 +4522,7 @@ class _ContentPage extends StatelessWidget {
         compact ? 16 : 28,
         compact ? 16 : 28,
         compact ? 16 : 28,
-        reserveBookNavigation && compact ? 92 + inset : (compact ? 16 : 28),
+        reserveFloatingNavigation && compact ? 92 + inset : (compact ? 16 : 28),
       ),
       child: Center(
         child: ConstrainedBox(

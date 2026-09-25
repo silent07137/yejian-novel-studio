@@ -341,6 +341,36 @@ void main() {
     expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
   });
 
+  testWidgets('工程文件入口区分单书 .sns 与多书 .snss', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('app-nav-settings')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('export-library-project')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('import-project-archive')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('app-nav-bookshelf')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导出').last);
+    await tester.pumpAndSettle();
+    expect(find.text('单书工程 .sns'), findsOneWidget);
+    expect(find.text('保存 .sns'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('悬浮底栏上滑收起并在下滑时显示', (tester) async {
     tester.view.physicalSize = const Size(412, 360);
     tester.view.devicePixelRatio = 1;
