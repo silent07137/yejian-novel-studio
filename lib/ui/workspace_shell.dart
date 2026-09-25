@@ -2476,7 +2476,7 @@ class _EditorPaneState extends State<_EditorPane> {
     if (!selection.isValid || !selection.isCollapsed) return;
     final offset = selection.baseOffset;
     final marker = widget.chapter.markers
-        .where((item) => item.start <= offset && offset < item.end)
+        .where((item) => item.containsCaret(offset))
         .firstOrNull;
     if (marker == null) return;
     _markerPreviewOpen = true;
@@ -3932,7 +3932,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.16 (18)';
+  static const _version = '0.4.0-dev.17 (19)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -3959,6 +3959,8 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.17\n'
+            '· 修正单字标注右半边点击时提示不出现\n\n'
             '0.4.0-dev.16\n'
             '· 时间线按数字层级与同时间顺序排列，保留故事时间\n'
             '· 正文选字菜单可直接添加标注，点击标注可查看备注\n'

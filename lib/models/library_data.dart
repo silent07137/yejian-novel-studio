@@ -155,6 +155,9 @@ class ChapterMarker {
   String note;
   String? referenceId;
 
+  // A tap on the last character can place the caret at [end].
+  bool containsCaret(int offset) => offset >= start && offset <= end;
+
   factory ChapterMarker.fromJson(Map<String, dynamic> json) => ChapterMarker(
     id: json['id'] as String,
     kind: json['kind'] as String? ?? 'revision',

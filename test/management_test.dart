@@ -29,6 +29,8 @@ void main() {
       kind: 'revision',
       note: '待推敲',
     )!;
+    expect(revision.containsCaret(revision.end), isTrue);
+    expect(revision.containsCaret(revision.end + 1), isFalse);
     final clueMarker = controller.addChapterMarker(
       start: 5,
       end: 9,
