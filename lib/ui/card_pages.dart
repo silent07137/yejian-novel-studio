@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../domain/entity_id.dart';
@@ -80,6 +82,15 @@ class _RoleDetailPageState extends State<RoleDetailPage> {
   Widget build(BuildContext context) {
     final relatedRoles =
         widget.controller.activeBook?.roles ?? const <RoleCard>[];
+    final hasRelations =
+        _role.relations.isNotEmpty ||
+        relatedRoles.any(
+          (role) =>
+              role.id != _role.id &&
+              role.relations.any(
+                (relation) => relation.targetRoleId == _role.id,
+              ),
+        );
     return Scaffold(
       appBar: AppBar(
         title: Text(_role.name),
@@ -163,6 +174,25 @@ class _RoleDetailPageState extends State<RoleDetailPage> {
               _RelationSection(
                 relations: _role.relations,
                 allRoles: relatedRoles,
+              ),
+            if (hasRelations)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 18),
+                child: OutlinedButton.icon(
+                  key: const ValueKey('open-role-relationship-map'),
+                  onPressed: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => _RoleRelationshipMapPage(
+                        role: _role,
+                        roles: relatedRoles,
+                        controller: widget.controller,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.hub_outlined),
+                  label: const Text('查看人物关系图'),
+                ),
               ),
             _DetailSection(
               title: '自定义条目',
@@ -377,7 +407,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
         ),
       ),
     );
-    if (created == true && name.text.trim().isNotEmpty) {
+    if (mounted && created == true && name.text.trim().isNotEmpty) {
       setState(() {
         _relations.add(
           RoleRelation(
@@ -391,6 +421,9 @@ class _RoleEditPageState extends State<RoleEditPage> {
         );
       });
     }
+    // The dialog remains in the overlay during its reverse transition.
+    // Keep its text controllers alive until its TextFields are unmounted.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     name.dispose();
     description.dispose();
     stage.dispose();
@@ -1001,13 +1034,19 @@ class _ReferenceDetailCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
             const SizedBox(height: 8),
             Text(
               body,
               style: TextStyle(
                 height: 1.55,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ],
@@ -1616,9 +1655,14 @@ class _CustomFieldInput extends StatelessWidget {
     }
     return TextFormField(
       initialValue: value?.toString() ?? '',
-      keyboardType: field.type == 'number'
-          ? const TextInputType.numberWithOptions(decimal: true)
-          : TextInputType.text,
+      keyboardType: switch (field.type) {
+        'number' => const TextInputType.numberWithOptions(decimal: true),
+        'longText' => TextInputType.multiline,
+        _ => TextInputType.text,
+      },
+      textInputAction: field.type == 'longText'
+          ? TextInputAction.newline
+          : null,
       minLines: field.type == 'longText' ? 3 : 1,
       maxLines: field.type == 'longText' ? 6 : 1,
       onChanged: onChanged,
@@ -1647,7 +1691,11 @@ class _DetailSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                title,
+                style: Theme.of(context).textTheme.titleLarge
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
               const SizedBox(height: 12),
               ...visible.map(
                 (entry) => Padding(
@@ -1657,10 +1705,17 @@ class _DetailSection extends StatelessWidget {
                     children: [
                       Text(
                         entry.key,
-                        style: Theme.of(context).textTheme.labelMedium,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
                       ),
-                      const SizedBox(height: 4),
-                      SelectableText(entry.value),
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        entry.value,
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(height: 1.55),
+                      ),
                     ],
                   ),
                 ),
@@ -1711,6 +1766,292 @@ class _RelationSection extends StatelessWidget {
       ),
     );
   }
+}
+
+class _RelationshipLink {
+  const _RelationshipLink({
+    required this.other,
+    required this.relation,
+    required this.outgoing,
+  });
+
+  final RoleCard other;
+  final RoleRelation relation;
+  final bool outgoing;
+}
+
+class _RoleRelationshipMapPage extends StatefulWidget {
+  const _RoleRelationshipMapPage({
+    required this.role,
+    required this.roles,
+    required this.controller,
+  });
+
+  final RoleCard role;
+  final List<RoleCard> roles;
+  final AppController controller;
+
+  @override
+  State<_RoleRelationshipMapPage> createState() =>
+      _RoleRelationshipMapPageState();
+}
+
+class _RoleRelationshipMapPageState extends State<_RoleRelationshipMapPage> {
+  final TransformationController _graphTransform = TransformationController();
+  bool _initialScaleSet = false;
+
+  @override
+  void dispose() {
+    _graphTransform.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final byId = {for (final item in widget.roles) item.id: item};
+    final links =
+        <_RelationshipLink>[
+          for (final relation in widget.role.relations)
+            if (byId[relation.targetRoleId] case final RoleCard other)
+              _RelationshipLink(
+                other: other,
+                relation: relation,
+                outgoing: true,
+              ),
+          for (final other in widget.roles)
+            if (other.id != widget.role.id)
+              for (final relation in other.relations)
+                if (relation.targetRoleId == widget.role.id)
+                  _RelationshipLink(
+                    other: other,
+                    relation: relation,
+                    outgoing: false,
+                  ),
+        ]..sort((a, b) {
+          final nameOrder = a.other.name.compareTo(b.other.name);
+          return nameOrder != 0
+              ? nameOrder
+              : a.relation.name.compareTo(b.relation.name);
+        });
+    final scheme = Theme.of(context).colorScheme;
+    const canvasWidth = 650.0;
+    final canvasHeight = math.max(320.0, 60.0 + links.length * 116.0);
+    final rootTop = canvasHeight / 2 - 38;
+    if (!_initialScaleSet) {
+      final screenSize = MediaQuery.sizeOf(context);
+      final width = screenSize.width;
+      final scale = math.min(1.0, (width - 24) / canvasWidth);
+      final availableHeight =
+          screenSize.height -
+          MediaQuery.paddingOf(context).vertical -
+          kToolbarHeight -
+          100;
+      _graphTransform.value = Matrix4.diagonal3Values(scale, scale, 1)
+        ..setTranslationRaw(
+          (width - canvasWidth * scale) / 2,
+          availableHeight / 2 - (rootTop + 38) * scale,
+          0,
+        );
+      _initialScaleSet = true;
+    }
+    return Scaffold(
+      appBar: AppBar(title: Text('${widget.role.name} · 人物关系')),
+      body: SafeArea(
+        top: false,
+        child: links.isEmpty
+            ? const Center(child: Text('还没有与这个角色相关的人物关系。'))
+            : Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '拖动查看 · 双指缩放 · 点击角色查看详情',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ClipRect(
+                      child: InteractiveViewer(
+                        transformationController: _graphTransform,
+                        constrained: false,
+                        boundaryMargin: const EdgeInsets.all(100),
+                        minScale: .4,
+                        maxScale: 2.5,
+                        child: SizedBox(
+                          width: canvasWidth,
+                          height: canvasHeight,
+                          child: Stack(
+                            children: [
+                              CustomPaint(
+                                size: Size(canvasWidth, canvasHeight),
+                                painter: _RelationshipLinesPainter(
+                                  links: links,
+                                  rootCenterY: rootTop + 38,
+                                  color: scheme.primary,
+                                ),
+                              ),
+                              Positioned(
+                                left: 20,
+                                top: rootTop,
+                                width: 180,
+                                child: _RelationshipNode(
+                                  key: const ValueKey('relationship-root-node'),
+                                  name: widget.role.name,
+                                  detail: widget.role.identity.isEmpty
+                                      ? '当前角色'
+                                      : widget.role.identity,
+                                  primary: true,
+                                ),
+                              ),
+                              for (final (index, link) in links.indexed)
+                                Positioned(
+                                  left: 424,
+                                  top: 50 + index * 116.0,
+                                  width: 204,
+                                  child: _RelationshipNode(
+                                    key: ValueKey(
+                                      'relationship-node-${link.relation.id}',
+                                    ),
+                                    name: link.other.name,
+                                    detail: [
+                                      link.relation.name,
+                                      if (link.relation.stage.isNotEmpty)
+                                        link.relation.stage,
+                                    ].join(' · '),
+                                    onTap: () => Navigator.push<void>(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => RoleDetailPage(
+                                          initialRole: link.other,
+                                          controller: widget.controller,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 4, 18, 20),
+                    child: Text(
+                      '箭头表示关系方向；双向关系两端均有箭头。',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class _RelationshipNode extends StatelessWidget {
+  const _RelationshipNode({
+    super.key,
+    required this.name,
+    required this.detail,
+    this.primary = false,
+    this.onTap,
+  });
+
+  final String name;
+  final String detail;
+  final bool primary;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      color: primary ? scheme.primaryContainer : scheme.surfaceContainerHigh,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                detail,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RelationshipLinesPainter extends CustomPainter {
+  const _RelationshipLinesPainter({
+    required this.links,
+    required this.rootCenterY,
+    required this.color,
+  });
+
+  final List<_RelationshipLink> links;
+  final double rootCenterY;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: .7)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    for (final (index, link) in links.indexed) {
+      final start = Offset(200, rootCenterY);
+      final end = Offset(424, 88 + index * 116.0);
+      final path = Path()
+        ..moveTo(start.dx, start.dy)
+        ..cubicTo(286, start.dy, 338, end.dy, end.dx, end.dy);
+      canvas.drawPath(path, paint);
+      if (link.outgoing || link.relation.direction == '双向') {
+        _drawArrow(canvas, paint, end, const Offset(1, 0));
+      }
+      if (!link.outgoing || link.relation.direction == '双向') {
+        _drawArrow(canvas, paint, start, const Offset(-1, 0));
+      }
+    }
+  }
+
+  void _drawArrow(Canvas canvas, Paint paint, Offset tip, Offset direction) {
+    const arrowSize = 8.0;
+    final base = tip - direction * arrowSize;
+    final perpendicular = Offset(-direction.dy, direction.dx) * 5;
+    canvas.drawPath(
+      Path()
+        ..moveTo(base.dx + perpendicular.dx, base.dy + perpendicular.dy)
+        ..lineTo(tip.dx, tip.dy)
+        ..lineTo(base.dx - perpendicular.dx, base.dy - perpendicular.dy),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RelationshipLinesPainter oldDelegate) =>
+      oldDelegate.links != links ||
+      oldDelegate.rootCenterY != rootCenterY ||
+      oldDelegate.color != color;
 }
 
 class _ReferenceField extends StatelessWidget {

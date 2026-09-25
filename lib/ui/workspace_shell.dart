@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
 import '../models/library_data.dart';
@@ -1970,6 +1970,7 @@ class _EditorPaneState extends State<_EditorPane> {
   late final FocusNode _bodyFocusNode;
   late final UndoHistoryController _undoController;
   late final ScrollController _bodyScrollController;
+  final GlobalKey _bodyFieldKey = GlobalKey();
   bool _showParagraphNumbers = false;
   bool _markerPreviewOpen = false;
 
@@ -2517,45 +2518,53 @@ class _EditorPaneState extends State<_EditorPane> {
     }
   }
 
+  RenderEditable? _findEditable(RenderObject? object) {
+    if (object is RenderEditable) return object;
+    RenderEditable? result;
+    object?.visitChildren((child) {
+      result ??= _findEditable(child);
+    });
+    return result;
+  }
+
   List<Widget> _paragraphNumberLabels(
     BuildContext context,
     BoxConstraints constraints,
-    TextStyle style,
   ) {
+    final stack = context.findRenderObject();
+    final editable = _findEditable(
+      _bodyFieldKey.currentContext?.findRenderObject(),
+    );
+    if (stack is! RenderBox || editable == null || !editable.hasSize) {
+      return const [];
+    }
     final content = _bodyController.text;
     final offsets = <int>[0];
     for (var index = 0; index < content.length; index++) {
       if (content.codeUnitAt(index) == 10) offsets.add(index + 1);
     }
-    final painter = TextPainter(
-      text: TextSpan(text: content, style: style),
-      textDirection: Directionality.of(context),
-      textScaler: MediaQuery.textScalerOf(context),
-    )..layout(maxWidth: (constraints.maxWidth - 34).clamp(1, double.infinity));
-    final scrollOffset = _bodyScrollController.hasClients
-        ? _bodyScrollController.offset
-        : 0.0;
-    final positions = [
-      for (final offset in offsets)
-        painter.getOffsetForCaret(TextPosition(offset: offset), Rect.zero).dy -
-            scrollOffset,
-    ];
-    painter.dispose();
+    final positions = offsets.map((offset) {
+      final caret = editable.getLocalRectForCaret(
+        TextPosition(offset: offset, affinity: TextAffinity.downstream),
+      );
+      return stack.globalToLocal(editable.localToGlobal(caret.topLeft)).dy +
+          (caret.height - 14) / 2;
+    }).toList();
     return [
       for (var index = 0; index < positions.length; index++)
-        if (positions[index] >= -style.fontSize! &&
+        if (positions[index] >= -14 &&
             positions[index] <= constraints.maxHeight)
           Positioned(
-            left: 0,
+            left: -23,
             top: positions[index],
-            width: 30,
+            width: 19,
             child: IgnorePointer(
               child: Text(
                 '${index + 1}',
                 key: ValueKey('paragraph-number-${index + 1}'),
                 textAlign: TextAlign.right,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 10,
                   color: Theme.of(context).colorScheme.onSurfaceVariant
                       .withValues(alpha: .5),
                 ),
@@ -2912,11 +2921,11 @@ class _EditorPaneState extends State<_EditorPane> {
                               letterSpacing: .15,
                             );
                             return Stack(
-                              clipBehavior: Clip.hardEdge,
+                              clipBehavior: Clip.none,
                               children: [
                                 Positioned.fill(
-                                  left: _showParagraphNumbers ? 34 : 0,
                                   child: TextField(
+                                    key: _bodyFieldKey,
                                     controller: _bodyController,
                                     scrollController: _bodyScrollController,
                                     focusNode: _bodyFocusNode,
@@ -2967,7 +2976,6 @@ class _EditorPaneState extends State<_EditorPane> {
                                   ..._paragraphNumberLabels(
                                     context,
                                     constraints,
-                                    bodyStyle,
                                   ),
                               ],
                             );
@@ -3932,7 +3940,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.17 (19)';
+  static const _version = '0.4.0-dev.18 (20)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -3959,6 +3967,9 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.18\n'
+            '· 新增可缩放的人物关系图，优化设定详情层级\n'
+            '· 修复世界观长文本换行和段号对齐\n\n'
             '0.4.0-dev.17\n'
             '· 修正单字标注右半边点击时提示不出现\n\n'
             '0.4.0-dev.16\n'

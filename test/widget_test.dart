@@ -6,6 +6,7 @@ import 'package:yejian_native/data/local_store.dart';
 import 'package:yejian_native/main.dart';
 import 'package:yejian_native/models/library_data.dart';
 import 'package:yejian_native/state/app_controller.dart';
+import 'package:yejian_native/ui/card_pages.dart';
 import 'package:yejian_native/ui/workspace_shell.dart';
 
 class MemoryStore implements DataStore {
@@ -204,6 +205,58 @@ void main() {
     expect(find.text('选择缩进段落'), findsOneWidget);
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('段落标记不挤压正文，换行和缩进后仍跟随段首', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final editor = find.byType(TextField).last;
+    final body = tester.widget<TextField>(editor).controller!;
+    body.text = '第一段\n第二段\n第三段';
+    await tester.pumpAndSettle();
+    final before = tester.getRect(editor);
+
+    await tester.tap(find.byTooltip('段落设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('显示段落标记'));
+    await tester.pumpAndSettle();
+    expect(tester.getRect(editor), before);
+    final number1 = find.byKey(const ValueKey('paragraph-number-1'));
+    final number2 = find.byKey(const ValueKey('paragraph-number-2'));
+    final number3 = find.byKey(const ValueKey('paragraph-number-3'));
+    expect(number1, findsOneWidget);
+    expect(number2, findsOneWidget);
+    expect(number3, findsOneWidget);
+    expect(
+      tester.getTopLeft(number2).dy,
+      greaterThan(tester.getTopLeft(number1).dy),
+    );
+    expect(
+      tester.getTopLeft(number3).dy,
+      greaterThan(tester.getTopLeft(number2).dy),
+    );
+
+    body.text = '　　第一段\n　　第二段\n　　第三段';
+    await tester.pumpAndSettle();
+    expect(tester.getRect(editor), before);
+    expect(
+      tester.getTopLeft(number2).dy,
+      greaterThan(tester.getTopLeft(number1).dy),
+    );
+    expect(
+      tester.getTopLeft(number3).dy,
+      greaterThan(tester.getTopLeft(number2).dy),
+    );
     await tester.pump(const Duration(milliseconds: 900));
   });
 
@@ -625,6 +678,164 @@ void main() {
 
     expect(find.text('23'), findsOneWidget);
     expect(controller.activeBook!.roles.first.age, '23');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('角色详情可查看结构化人物关系图并打开关联角色', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    data.books.first.roles.first.relations.add(
+      RoleRelation(
+        id: 'test-relation',
+        targetRoleId: 'role-2',
+        name: '旧友',
+        direction: '双向',
+      ),
+    );
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('林照').first);
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('open-role-relationship-map')),
+      250,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const ValueKey('open-role-relationship-map')));
+    await tester.pumpAndSettle();
+    expect(find.text('林照 · 人物关系'), findsOneWidget);
+    final relatedNode = find.byKey(
+      const ValueKey('relationship-node-test-relation'),
+    );
+    expect(relatedNode, findsOneWidget);
+    expect(tester.getRect(relatedNode).right, lessThan(412));
+    expect(find.text('旧友'), findsOneWidget);
+    await tester.tap(relatedNode);
+    await tester.pumpAndSettle();
+    expect(find.text('江迟'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('关系较多时当前角色仍位于关系图可视区域', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    for (var index = 0; index < 30; index++) {
+      data.books.first.roles.first.relations.add(
+        RoleRelation(
+          id: 'relation-$index',
+          targetRoleId: 'role-2',
+          name: '关系 $index',
+        ),
+      );
+    }
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('林照').first);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('open-role-relationship-map')),
+      250,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.tap(find.byKey(const ValueKey('open-role-relationship-map')));
+    await tester.pumpAndSettle();
+    final root = tester.getRect(
+      find.byKey(const ValueKey('relationship-root-node')),
+    );
+    expect(root.center.dy, greaterThan(100));
+    expect(root.center.dy, lessThan(800));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('角色编辑可新增关系并安全关闭输入对话框', (tester) async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final roles = data.books.first.roles;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: RoleEditPage(
+          role: roles.first,
+          allRoles: roles,
+          baseFields: data.books.first.roleBaseFields,
+          sharedFields: data.books.first.roleFields,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('能力、弱点与人物关系'));
+    await tester.tap(find.text('能力、弱点与人物关系'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('新增').first,
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('新增').first);
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    await tester.enterText(
+      find.descendant(of: dialog, matching: find.byType(TextField)).first,
+      '朋友',
+    );
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: dialog, matching: find.text('添加')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('朋友 · 江迟'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('世界观自定义长文本可输入换行', (tester) async {
+    final field = CustomFieldDefinition(
+      id: 'world-longtext-test',
+      name: '历史沿革',
+      type: 'longText',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WorldEditPage(
+          world: WorldCard(
+            id: 'world-test',
+            title: '测试地点',
+            customFields: [field],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final input = find.descendant(
+      of: find.byKey(const ValueKey('world-longtext-test')),
+      matching: find.byType(TextFormField),
+    );
+    await tester.scrollUntilVisible(
+      input,
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final textField = tester.widget<TextField>(
+      find.descendant(of: input, matching: find.byType(TextField)),
+    );
+    expect(textField.keyboardType, TextInputType.multiline);
+    expect(textField.textInputAction, TextInputAction.newline);
+    await tester.enterText(input, '第一年\n第二年');
+    expect(textField.maxLines, greaterThan(1));
+    expect(find.text('第一年\n第二年'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
