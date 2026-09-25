@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/library_data.dart';
 import '../state/app_controller.dart';
@@ -694,7 +695,6 @@ class StoryPlanningPage extends StatefulWidget {
 class _StoryPlanningPageState extends State<StoryPlanningPage> {
   _PlotTool _tool = _PlotTool.structure;
   _StoryView _view = _StoryView.axis;
-  var _narrativeOrder = false;
   final Set<String> _selectedTracks = {};
   final Set<String> _collapsedMindGroups = {};
   final ScrollController _timelineController = ScrollController();
@@ -732,27 +732,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
     final events = book.events
         .where((event) => event.trackIds.any(selected.contains))
         .toList();
-    if (_narrativeOrder) {
-      int chapterIndex(StoryEvent event) {
-        final index = book.chapters.indexWhere(
-          (chapter) => chapter.id == event.chapterId,
-        );
-        return index < 0 ? 1 << 20 : index;
-      }
-
-      events.sort((a, b) {
-        final byChapter = chapterIndex(a).compareTo(chapterIndex(b));
-        return byChapter == 0 ? a.order.compareTo(b.order) : byChapter;
-      });
-    } else {
-      events.sort((a, b) {
-        final aUnknown = a.storyDate.trim().isEmpty || a.storyDate == '时间未定';
-        final bUnknown = b.storyDate.trim().isEmpty || b.storyDate == '时间未定';
-        if (aUnknown != bUnknown) return aUnknown ? 1 : -1;
-        final byDate = a.storyDate.compareTo(b.storyDate);
-        return byDate == 0 ? a.order.compareTo(b.order) : byDate;
-      });
-    }
+    events.sort(compareTimelineEvents);
     return events;
   }
 
@@ -808,12 +788,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
         .where((track) => _selectedTracks.contains(track.id))
         .toList();
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        12,
-        12,
-        12,
-        76 + MediaQuery.viewPaddingOf(context).bottom,
-      ),
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -873,7 +848,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
           const SizedBox(height: 6),
           Text(
             switch (_view) {
-              _StoryView.axis => '等距顺序示意 · 非真实时长比例',
+              _StoryView.axis => '按时间层级与同时间排序升序 · 非真实时长比例',
               _StoryView.mind => '点主题折叠，点事件查看；双指缩放与平移',
               _StoryView.flow => '因果与分歧关系 · 箭头表示方向',
             },
@@ -1205,22 +1180,12 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
     });
   }
 
-  Widget _buildOrderSelector() => Row(
+  Widget _buildOrderSelector() => const Row(
+    key: ValueKey('timeline-order-rule'),
     children: [
-      const Text('事件排序'),
-      const SizedBox(width: 12),
-      Expanded(
-        child: SegmentedButton<bool>(
-          showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(value: false, label: Text('故事时间')),
-            ButtonSegment(value: true, label: Text('章节叙述顺序')),
-          ],
-          selected: {_narrativeOrder},
-          onSelectionChanged: (values) =>
-              setState(() => _narrativeOrder = values.single),
-        ),
-      ),
+      Icon(Icons.sort_rounded, size: 18),
+      SizedBox(width: 6),
+      Expanded(child: Text('按总时间层级 ↑，同层按同时间排序 ↑')),
     ],
   );
 
@@ -1459,17 +1424,22 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
     final book = _book;
     if (book == null) return;
     final title = TextEditingController(text: existing?.title ?? '');
-    final date = TextEditingController(text: existing?.storyDate ?? '');
-    final description = TextEditingController(
-      text: existing?.description ?? '',
-    );
     final group = TextEditingController(
       text: initialGroup ?? existing?.group ?? '',
     );
-    final order = TextEditingController(
-      text: existing?.order.toStringAsFixed(0) ?? '${book.events.length + 1}',
+    final storyDate = TextEditingController(text: existing?.storyDate ?? '');
+    final description = TextEditingController(
+      text: existing?.description ?? '',
     );
     var chapterId = existing?.chapterId ?? '';
+    final timeLevel = TextEditingController(
+      text:
+          '${existing?.timeLevel ?? book.events.fold<int>(0, (max, event) => event.timeLevel > max ? event.timeLevel : max) + 1}',
+    );
+    final sameTimeOrder = TextEditingController(
+      text: '${existing?.sameTimeOrder ?? 1}',
+    );
+    String? validationError;
     final selected = <String>{
       ...?existing?.trackIds,
       if (existing == null && book.tracks.isNotEmpty) book.tracks.first.id,
@@ -1493,26 +1463,20 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
-                    controller: date,
-                    decoration: const InputDecoration(
-                      labelText: '故事内发生时间',
-                      hintText: '例如：秋二日 / 霜历218年',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
                     controller: group,
                     decoration: const InputDecoration(
-                      labelText: '导图分组（可选）',
+                      labelText: '分组',
                       hintText: '例如：来信之谜、林照的选择',
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
-                    controller: description,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: const InputDecoration(labelText: '事件说明'),
+                    key: const ValueKey('event-story-date'),
+                    controller: storyDate,
+                    decoration: const InputDecoration(
+                      labelText: '故事时间',
+                      hintText: '例如：秋二日 · 夜',
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -1520,41 +1484,71 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                     children: [
                       Expanded(
                         child: TextField(
-                          controller: order,
+                          key: const ValueKey('event-time-level'),
+                          controller: timeLevel,
                           keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                          ],
                           decoration: const InputDecoration(
-                            labelText: '同时间内排序',
+                            labelText: '总时间层级',
+                            helperText: '数字小的靠上',
                           ),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: chapterId,
-                          isExpanded: true,
-                          decoration: const InputDecoration(labelText: '关联章节'),
-                          items: [
-                            const DropdownMenuItem(
-                              value: '',
-                              child: Text('不关联章节'),
-                            ),
-                            ...book.chapters.map(
-                              (chapter) => DropdownMenuItem(
-                                value: chapter.id,
-                                child: Text(
-                                  chapter.title,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ),
+                        child: TextField(
+                          key: const ValueKey('event-same-time-order'),
+                          controller: sameTimeOrder,
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
                           ],
-                          onChanged: (value) =>
-                              setDialogState(() => chapterId = value ?? ''),
+                          decoration: const InputDecoration(
+                            labelText: '同时间排序',
+                            helperText: '同层内数字小的靠上',
+                          ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
+                  ExpansionTile(
+                    title: const Text('更多信息'),
+                    tilePadding: EdgeInsets.zero,
+                    children: [
+                      TextField(
+                        controller: description,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: const InputDecoration(labelText: '事件说明'),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: chapterId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(labelText: '关联章节'),
+                        items: [
+                          const DropdownMenuItem(
+                            value: '',
+                            child: Text('不关联章节'),
+                          ),
+                          ...book.chapters.map(
+                            (chapter) => DropdownMenuItem(
+                              value: chapter.id,
+                              child: Text(
+                                chapter.title,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) => chapterId = value ?? '',
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
@@ -1602,7 +1596,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '所属时间线',
+                      '时间线',
                       style: Theme.of(context).textTheme.labelLarge,
                     ),
                   ),
@@ -1627,6 +1621,15 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                           .toList(),
                     ),
                   ),
+                  if (validationError != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      validationError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1637,7 +1640,33 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
               child: const Text('取消'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () {
+                final level = int.tryParse(timeLevel.text.trim());
+                final within = int.tryParse(sameTimeOrder.text.trim());
+                if (title.text.trim().isEmpty ||
+                    level == null ||
+                    level < 1 ||
+                    within == null ||
+                    within < 1 ||
+                    selected.isEmpty) {
+                  setDialogState(
+                    () => validationError = '请填写名称和正整数排序，并至少选择一条时间线',
+                  );
+                  return;
+                }
+                if (book.events.any(
+                  (event) =>
+                      event.id != existing?.id &&
+                      event.timeLevel == level &&
+                      event.sameTimeOrder == within,
+                )) {
+                  setDialogState(
+                    () => validationError = '这个层级中的同时间排序已被占用，请换一个数字',
+                  );
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
               child: const Text('保存'),
             ),
           ],
@@ -1645,19 +1674,18 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
       ),
     );
     final eventTitle = title.text.trim();
-    final eventDate = date.text.trim();
     final eventGroup = group.text.trim();
+    final eventStoryDate = storyDate.text.trim();
     final eventDescription = description.text.trim();
-    final eventOrder =
-        double.tryParse(order.text.trim()) ??
-        existing?.order ??
-        book.events.length + 1;
+    final eventLevel = int.tryParse(timeLevel.text.trim()) ?? 1;
+    final eventSameOrder = int.tryParse(sameTimeOrder.text.trim()) ?? 1;
     await Future<void>.delayed(const Duration(milliseconds: 250));
     title.dispose();
-    date.dispose();
-    description.dispose();
     group.dispose();
-    order.dispose();
+    storyDate.dispose();
+    description.dispose();
+    timeLevel.dispose();
+    sameTimeOrder.dispose();
     if (created == true && eventTitle.isNotEmpty) {
       final roleNames = book.roles
           .where((role) => selectedRoles.contains(role.id))
@@ -1666,21 +1694,24 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
       if (existing == null) {
         widget.controller.createEvent(
           eventTitle,
-          eventDate,
+          storyDate: eventStoryDate,
           description: eventDescription,
           chapterId: chapterId.isEmpty ? null : chapterId,
           roleIds: selectedRoles.toList(),
           group: eventGroup,
           trackIds: selected.toList(),
-          order: eventOrder,
+          timeLevel: eventLevel,
+          sameTimeOrder: eventSameOrder,
         );
       } else {
         widget.controller.updateEvent(
           StoryEvent(
             id: existing.id,
             title: eventTitle,
-            storyDate: eventDate.isEmpty ? '时间未定' : eventDate,
-            order: eventOrder,
+            storyDate: eventStoryDate.isEmpty ? '时间未定' : eventStoryDate,
+            order: eventLevel.toDouble(),
+            timeLevel: eventLevel,
+            sameTimeOrder: eventSameOrder,
             description: eventDescription,
             chapterId: chapterId.isEmpty ? null : chapterId,
             persons: roleNames,
@@ -1988,11 +2019,15 @@ class _MobileTimelineCanvas extends StatelessWidget {
     const laneWidth = 146.0;
     const top = 56.0;
     const rowHeight = 108.0;
-    final rows = <String, List<StoryEvent>>{};
+    final rows = <int, List<StoryEvent>>{};
     for (final event in events) {
-      rows.putIfAbsent(event.storyDate, () => []).add(event);
+      rows.putIfAbsent(event.timeLevel, () => []).add(event);
     }
-    final rowEntries = rows.entries.toList();
+    final rowEntries = rows.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    for (final row in rowEntries) {
+      row.value.sort(compareTimelineEvents);
+    }
     final rowHeights = rowEntries.map((row) {
       var maxLaneEvents = 1;
       for (final track in tracks) {
@@ -2077,7 +2112,7 @@ class _MobileTimelineCanvas extends StatelessWidget {
                             top: topOffset + 22,
                             width: leftGutter - 9,
                             child: Text(
-                              _shortStoryDate(row.key),
+                              '${row.key}',
                               textAlign: TextAlign.right,
                               maxLines: 2,
                               style: Theme.of(context).textTheme.bodySmall,
@@ -2126,11 +2161,6 @@ class _MobileTimelineCanvas extends StatelessWidget {
   }
 }
 
-String _shortStoryDate(String value) {
-  final parts = value.split('·');
-  return parts.length > 1 ? parts.last.trim() : value;
-}
-
 class _TimelineEventNode extends StatelessWidget {
   const _TimelineEventNode({
     required this.event,
@@ -2172,6 +2202,13 @@ class _TimelineEventNode extends StatelessWidget {
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const Spacer(),
+                    if (event.storyDate != '时间未定')
+                      Text(
+                        event.storyDate,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     Text(
                       event.group,
                       maxLines: 1,

@@ -1969,6 +1969,9 @@ class _EditorPaneState extends State<_EditorPane> {
   late final _MarkedBodyController _bodyController;
   late final FocusNode _bodyFocusNode;
   late final UndoHistoryController _undoController;
+  late final ScrollController _bodyScrollController;
+  bool _showParagraphNumbers = false;
+  bool _markerPreviewOpen = false;
 
   @override
   void initState() {
@@ -1977,6 +1980,7 @@ class _EditorPaneState extends State<_EditorPane> {
     _bodyController = _MarkedBodyController(widget.chapter);
     _bodyFocusNode = FocusNode();
     _undoController = UndoHistoryController();
+    _bodyScrollController = ScrollController()..addListener(_onBodyScroll);
     _titleController.addListener(_commitTitleWhenCompositionEnds);
     _bodyController.addListener(_commitBodyWhenCompositionEnds);
   }
@@ -1993,6 +1997,10 @@ class _EditorPaneState extends State<_EditorPane> {
     widget.controller.updateChapterBody(_bodyController.text);
   }
 
+  void _onBodyScroll() {
+    if (_showParagraphNumbers && mounted) setState(() {});
+  }
+
   void _toggleIndent() {
     final value = _bodyController.value;
     final selection = value.selection;
@@ -2002,36 +2010,111 @@ class _EditorPaneState extends State<_EditorPane> {
         ? -1
         : value.text.lastIndexOf('\n', searchStart);
     final start = lineStart < 0 ? 0 : lineStart + 1;
-    final selectionEnd = selection.isValid && !selection.isCollapsed
-        ? selection.end
-        : offset;
-    final nextBreak = value.text.indexOf('\n', selectionEnd);
+    final nextBreak = value.text.indexOf('\n', offset);
     final end = nextBreak < 0 ? value.text.length : nextBreak;
     const indent = '　　';
     final hasIndent = value.text.startsWith(indent, start);
     final paragraph = value.text.substring(start, end);
-    final lines = paragraph.split('\n');
-    final nextParagraph = lines
-        .map(
-          (line) => hasIndent
-              ? (line.startsWith(indent) ? line.substring(indent.length) : line)
-              : '$indent$line',
-        )
-        .join('\n');
+    final nextParagraph = hasIndent
+        ? paragraph.substring(indent.length)
+        : '$indent$paragraph';
     final nextText = value.text.replaceRange(start, end, nextParagraph);
-    final delta = nextParagraph.length - paragraph.length;
     final nextOffset = (offset + (hasIndent ? -indent.length : indent.length))
         .clamp(0, nextText.length);
     _bodyController.value = value.copyWith(
       text: nextText,
-      selection: selection.isValid && !selection.isCollapsed
-          ? TextSelection(
-              baseOffset: nextOffset,
-              extentOffset: (selection.end + delta).clamp(0, nextText.length),
-            )
-          : TextSelection.collapsed(offset: nextOffset),
+      selection: TextSelection.collapsed(offset: nextOffset),
       composing: TextRange.empty,
     );
+  }
+
+  Future<void> _showIndentSelector() async {
+    final lines = _bodyController.text.split('\n');
+    const indent = '　　';
+    final selected = <int>{
+      for (var i = 0; i < lines.length; i++)
+        if (lines[i].startsWith(indent)) i,
+    };
+    final result = await showDialog<Set<int>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('选择缩进段落'),
+          content: SizedBox(
+            width: 420,
+            height: MediaQuery.sizeOf(context).height * .55,
+            child: ListView.builder(
+              itemCount: lines.length,
+              itemBuilder: (context, index) => CheckboxListTile(
+                value: selected.contains(index),
+                title: Text('第 ${index + 1} 段'),
+                subtitle: Text(
+                  lines[index].trim().isEmpty ? '空段落' : lines[index].trim(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onChanged: (value) => setDialogState(() {
+                  value == true ? selected.add(index) : selected.remove(index);
+                }),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, selected.toSet()),
+              child: const Text('应用'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final revised = [
+      for (var i = 0; i < lines.length; i++)
+        result.contains(i)
+            ? (lines[i].startsWith(indent) ? lines[i] : '$indent${lines[i]}')
+            : (lines[i].startsWith(indent)
+                  ? lines[i].substring(indent.length)
+                  : lines[i]),
+    ].join('\n');
+    final offset = _bodyController.selection.baseOffset;
+    _bodyController.value = _bodyController.value.copyWith(
+      text: revised,
+      selection: TextSelection.collapsed(
+        offset: offset.clamp(0, revised.length),
+      ),
+      composing: TextRange.empty,
+    );
+  }
+
+  Future<void> _showLineSpacing() async {
+    final current = widget.controller.data.settings.lineHeight;
+    final selected = await showModalBottomSheet<double>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(title: Text('行距')),
+            for (final value in const [1.4, 1.6, 1.8])
+              ListTile(
+                title: Text('${value.toStringAsFixed(1)} 倍'),
+                trailing: current == value
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: () => Navigator.pop(context, value),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) widget.controller.updateLineHeight(selected);
   }
 
   Future<void> _showChapterDirectory() async {
@@ -2387,6 +2470,101 @@ class _EditorPaneState extends State<_EditorPane> {
     _bodyController.selection = selection;
   }
 
+  Future<void> _showMarkerAtCursor() async {
+    if (_markerPreviewOpen || !mounted) return;
+    final selection = _bodyController.selection;
+    if (!selection.isValid || !selection.isCollapsed) return;
+    final offset = selection.baseOffset;
+    final marker = widget.chapter.markers
+        .where((item) => item.start <= offset && offset < item.end)
+        .firstOrNull;
+    if (marker == null) return;
+    _markerPreviewOpen = true;
+    final kind = switch (marker.kind) {
+      'clue' => '伏笔',
+      'idea' => '灵感',
+      _ => '待修改',
+    };
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (context) => SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '正文标注 · $kind',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 10),
+                Text('“${marker.quote}”'),
+                if (marker.note.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(marker.note),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    } finally {
+      _markerPreviewOpen = false;
+    }
+  }
+
+  List<Widget> _paragraphNumberLabels(
+    BuildContext context,
+    BoxConstraints constraints,
+    TextStyle style,
+  ) {
+    final content = _bodyController.text;
+    final offsets = <int>[0];
+    for (var index = 0; index < content.length; index++) {
+      if (content.codeUnitAt(index) == 10) offsets.add(index + 1);
+    }
+    final painter = TextPainter(
+      text: TextSpan(text: content, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(maxWidth: (constraints.maxWidth - 34).clamp(1, double.infinity));
+    final scrollOffset = _bodyScrollController.hasClients
+        ? _bodyScrollController.offset
+        : 0.0;
+    final positions = [
+      for (final offset in offsets)
+        painter.getOffsetForCaret(TextPosition(offset: offset), Rect.zero).dy -
+            scrollOffset,
+    ];
+    painter.dispose();
+    return [
+      for (var index = 0; index < positions.length; index++)
+        if (positions[index] >= -style.fontSize! &&
+            positions[index] <= constraints.maxHeight)
+          Positioned(
+            left: 0,
+            top: positions[index],
+            width: 30,
+            child: IgnorePointer(
+              child: Text(
+                '${index + 1}',
+                key: ValueKey('paragraph-number-${index + 1}'),
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant
+                      .withValues(alpha: .5),
+                ),
+              ),
+            ),
+          ),
+    ];
+  }
+
   Future<void> _showMarkers() async {
     final book = widget.controller.activeBook;
     final selectedId = await showModalBottomSheet<String>(
@@ -2582,6 +2760,7 @@ class _EditorPaneState extends State<_EditorPane> {
     _bodyController.removeListener(_commitBodyWhenCompositionEnds);
     _bodyFocusNode.dispose();
     _undoController.dispose();
+    _bodyScrollController.dispose();
     _titleController.dispose();
     _bodyController.dispose();
     super.dispose();
@@ -2662,18 +2841,42 @@ class _EditorPaneState extends State<_EditorPane> {
                   onSelected: (value) {
                     if (value == 'indent') {
                       _toggleIndent();
-                    } else if (value.startsWith('line:')) {
-                      widget.controller.updateLineHeight(
-                        double.parse(value.substring(5)),
+                    } else if (value == 'line') {
+                      _showLineSpacing();
+                    } else if (value == 'numbers') {
+                      setState(
+                        () => _showParagraphNumbers = !_showParagraphNumbers,
                       );
                     }
                   },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'indent', child: Text('切换首行缩进')),
-                    PopupMenuDivider(),
-                    PopupMenuItem(value: 'line:1.4', child: Text('行距 · 1.4 倍')),
-                    PopupMenuItem(value: 'line:1.6', child: Text('行距 · 1.6 倍')),
-                    PopupMenuItem(value: 'line:1.8', child: Text('行距 · 1.8 倍')),
+                  itemBuilder: (menuContext) => [
+                    PopupMenuItem(
+                      value: 'indent',
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onLongPress: () {
+                          Navigator.pop(menuContext);
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted) _showIndentSelector();
+                          });
+                        },
+                        child: const SizedBox(
+                          width: double.infinity,
+                          child: Text('切换首行缩进 · 长按选择段落'),
+                        ),
+                      ),
+                    ),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(
+                      value: 'numbers',
+                      child: Text(_showParagraphNumbers ? '隐藏段落标记' : '显示段落标记'),
+                    ),
+                    PopupMenuItem(
+                      value: 'line',
+                      child: Text(
+                        '行距 · ${settings.lineHeight.toStringAsFixed(1)} 倍',
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -2684,14 +2887,7 @@ class _EditorPaneState extends State<_EditorPane> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 820),
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    42,
-                    34,
-                    42,
-                    compact && !keyboardOpen
-                        ? 92 + MediaQuery.viewPaddingOf(context).bottom
-                        : 24,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(24, 34, 24, 24),
                   child: Column(
                     children: [
                       TextField(
@@ -2708,28 +2904,74 @@ class _EditorPaneState extends State<_EditorPane> {
                       ),
                       const SizedBox(height: 18),
                       Expanded(
-                        child: TextField(
-                          controller: _bodyController,
-                          focusNode: _bodyFocusNode,
-                          undoController: _undoController,
-                          expands: true,
-                          maxLines: null,
-                          minLines: null,
-                          textAlignVertical: TextAlignVertical.top,
-                          keyboardType: TextInputType.multiline,
-                          style: TextStyle(
-                            fontSize: settings.fontSize,
-                            height: settings.lineHeight,
-                            letterSpacing: .15,
-                          ),
-                          decoration: const InputDecoration(
-                            hintText: '从这里开始写……',
-                            border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            filled: false,
-                            contentPadding: EdgeInsets.zero,
-                          ),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final bodyStyle = TextStyle(
+                              fontSize: settings.fontSize,
+                              height: settings.lineHeight,
+                              letterSpacing: .15,
+                            );
+                            return Stack(
+                              clipBehavior: Clip.hardEdge,
+                              children: [
+                                Positioned.fill(
+                                  left: _showParagraphNumbers ? 34 : 0,
+                                  child: TextField(
+                                    controller: _bodyController,
+                                    scrollController: _bodyScrollController,
+                                    focusNode: _bodyFocusNode,
+                                    undoController: _undoController,
+                                    expands: true,
+                                    maxLines: null,
+                                    minLines: null,
+                                    textAlignVertical: TextAlignVertical.top,
+                                    keyboardType: TextInputType.multiline,
+                                    style: bodyStyle,
+                                    onTap: () => WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (mounted) _showMarkerAtCursor();
+                                        }),
+                                    contextMenuBuilder: (context, editable) {
+                                      final items = editable
+                                          .contextMenuButtonItems
+                                          .toList();
+                                      if (!_bodyController
+                                          .selection
+                                          .isCollapsed) {
+                                        items.add(
+                                          ContextMenuButtonItem(
+                                            label: '添加标注',
+                                            onPressed: () {
+                                              editable.hideToolbar();
+                                              _addMarker();
+                                            },
+                                          ),
+                                        );
+                                      }
+                                      return AdaptiveTextSelectionToolbar.buttonItems(
+                                        anchors: editable.contextMenuAnchors,
+                                        buttonItems: items,
+                                      );
+                                    },
+                                    decoration: const InputDecoration(
+                                      hintText: '从这里开始写……',
+                                      border: InputBorder.none,
+                                      enabledBorder: InputBorder.none,
+                                      focusedBorder: InputBorder.none,
+                                      filled: false,
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                  ),
+                                ),
+                                if (_showParagraphNumbers)
+                                  ..._paragraphNumberLabels(
+                                    context,
+                                    constraints,
+                                    bodyStyle,
+                                  ),
+                              ],
+                            );
+                          },
                         ),
                       ),
                     ],
@@ -3175,7 +3417,7 @@ class TimelinePage extends StatelessWidget {
       ),
     );
     if (created == true && title.text.trim().isNotEmpty) {
-      controller.createEvent(title.text.trim(), date.text.trim());
+      controller.createEvent(title.text.trim(), storyDate: date.text.trim());
     }
     title.dispose();
     date.dispose();
@@ -3541,7 +3783,7 @@ class ApplicationSettingsPage extends StatelessWidget {
                         ButtonSegment(
                           value: 'system',
                           icon: Icon(Icons.brightness_auto_rounded, size: 18),
-                          label: Text('跟随系统'),
+                          label: Text('同步'),
                         ),
                       ],
                       selected: {settings.appearanceMode},
@@ -3690,7 +3932,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.15 (17)';
+  static const _version = '0.4.0-dev.16 (18)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -3717,6 +3959,11 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.16\n'
+            '· 时间线按数字层级与同时间顺序排列，保留故事时间\n'
+            '· 正文选字菜单可直接添加标注，点击标注可查看备注\n'
+            '· 段落设置新增段号显示和批量缩进，行距统一入口\n'
+            '· 书内底栏改为覆盖式悬浮，同步显示模式文案优化\n\n'
             '0.4.0-dev.15\n'
             '· 作品打开与返回恢复页面切换动画\n'
             '· 伏笔和灵感支持删除\n'

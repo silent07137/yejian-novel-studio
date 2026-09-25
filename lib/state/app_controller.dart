@@ -672,15 +672,16 @@ class AppController extends ChangeNotifier {
   }
 
   void createEvent(
-    String title,
-    String storyDate, {
+    String title, {
+    String storyDate = '时间未定',
     String description = '',
     String? chapterId,
     String persons = '',
     List<String>? roleIds,
     String group = '尚未分组',
     List<String>? trackIds,
-    double? order,
+    int? timeLevel,
+    int? sameTimeOrder,
     int? flowLevel,
   }) {
     final book = activeBook;
@@ -693,19 +694,31 @@ class AppController extends ChangeNotifier {
         .where((role) => selectedRoleIds.contains(role.id))
         .map((role) => role.name)
         .join('、');
+    final level = timeLevel != null && timeLevel > 0
+        ? timeLevel
+        : book.events.fold<int>(
+                0,
+                (max, event) => event.timeLevel > max ? event.timeLevel : max,
+              ) +
+              1;
+    final withinLevel = sameTimeOrder != null && sameTimeOrder > 0
+        ? sameTimeOrder
+        : book.events
+                  .where((event) => event.timeLevel == level)
+                  .fold<int>(
+                    0,
+                    (max, event) =>
+                        event.sameTimeOrder > max ? event.sameTimeOrder : max,
+                  ) +
+              1;
     book.events.add(
       StoryEvent(
         id: newEntityId('event'),
         title: title,
-        storyDate: storyDate.isEmpty ? '时间未定' : storyDate,
-        order:
-            order ??
-            (book.events.isEmpty
-                ? 1
-                : book.events
-                          .map((event) => event.order)
-                          .reduce((a, b) => a > b ? a : b) +
-                      1),
+        storyDate: storyDate.trim().isEmpty ? '时间未定' : storyDate.trim(),
+        timeLevel: level,
+        sameTimeOrder: withinLevel,
+        order: level.toDouble(),
         description: description.trim(),
         chapterId: chapterId ?? selectedChapterId,
         persons: selectedRoleNames.isEmpty ? persons : selectedRoleNames,
@@ -729,7 +742,12 @@ class AppController extends ChangeNotifier {
 
   void updateEvent(StoryEvent updated) {
     final book = activeBook;
-    if (book == null || updated.title.trim().isEmpty) return;
+    if (book == null ||
+        updated.title.trim().isEmpty ||
+        updated.timeLevel < 1 ||
+        updated.sameTimeOrder < 1) {
+      return;
+    }
     final index = book.events.indexWhere((event) => event.id == updated.id);
     if (index < 0) return;
     book.events[index] = updated;

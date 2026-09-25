@@ -144,6 +144,8 @@ void main() {
         title: '修订事件',
         storyDate: '秋三日',
         order: 3,
+        timeLevel: 3,
+        sameTimeOrder: 1,
         trackIds: [track.id],
       ),
     );
@@ -159,5 +161,51 @@ void main() {
     );
     expect(book.tracks.any((item) => item.id == track.id), isFalse);
     expect(book.events.every((item) => item.trackIds.isNotEmpty), isTrue);
+  });
+
+  test('时间线先按数字层级，再按同时间排序；故事时间文字保留', () {
+    final events = [
+      StoryEvent(
+        id: 'late',
+        title: '晚',
+        storyDate: '秋十日',
+        timeLevel: 10,
+        sameTimeOrder: 1,
+      ),
+      StoryEvent(
+        id: 'second',
+        title: '同层二',
+        storyDate: '秋一日',
+        timeLevel: 2,
+        sameTimeOrder: 2,
+      ),
+      StoryEvent(
+        id: 'first',
+        title: '同层一',
+        storyDate: '冬一日',
+        timeLevel: 2,
+        sameTimeOrder: 1,
+      ),
+    ]..sort(compareTimelineEvents);
+    expect(events.map((event) => event.id), ['first', 'second', 'late']);
+    expect(events.first.storyDate, '冬一日');
+
+    final legacyJson = Book(
+      id: 'book',
+      title: '迁移',
+      events: [
+        StoryEvent(id: 'old-a', title: '旧一', storyDate: '春', order: 1),
+        StoryEvent(id: 'old-b', title: '旧二', storyDate: '春', order: 2),
+        StoryEvent(id: 'old-c', title: '旧三', storyDate: '夏', order: 3),
+      ],
+    ).toJson();
+    for (final item in legacyJson['events'] as List<dynamic>) {
+      (item as Map<String, dynamic>).remove('timeLevel');
+      item.remove('sameTimeOrder');
+    }
+    final restored = Book.fromJson(legacyJson);
+    expect(restored.events.map((event) => event.timeLevel), [1, 1, 2]);
+    expect(restored.events.map((event) => event.sameTimeOrder), [1, 2, 1]);
+    expect(restored.events.first.storyDate, '春');
   });
 }

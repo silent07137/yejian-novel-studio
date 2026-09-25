@@ -123,6 +123,20 @@ void main() {
         .widget<TextField>(find.byType(TextField).last)
         .controller!;
     body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    final editorFinder = find.byType(EditableText).last;
+    final bodyField = tester.widget<TextField>(find.byType(TextField).last);
+    final selectionToolbar = bodyField.contextMenuBuilder!(
+      tester.element(editorFinder),
+      tester.state<EditableTextState>(editorFinder),
+    ) as AdaptiveTextSelectionToolbar;
+    expect(
+      selectionToolbar.buttonItems!.any((item) => item.label == '添加标注'),
+      isTrue,
+    );
+    expect(
+      MaterialLocalizations.of(tester.element(editorFinder)).copyButtonLabel,
+      '复制',
+    );
     await tester.tap(find.byKey(const ValueKey('add-chapter-marker')));
     await tester.pumpAndSettle();
     expect(find.text('添加正文标注'), findsOneWidget);
@@ -130,6 +144,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.activeChapter!.markers, hasLength(1));
     expect(controller.activeChapter!.markers.single.quote, '入秋后的');
+
+    await tester.tapAt(tester.getTopLeft(editorFinder) + const Offset(8, 12));
+    await tester.pumpAndSettle();
+    expect(find.text('正文标注 · 待修改'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const ValueKey('open-chapter-markers')));
     await tester.pumpAndSettle();
@@ -158,15 +178,32 @@ void main() {
     body.selection = const TextSelection.collapsed(offset: 0);
     await tester.tap(find.byTooltip('段落设置'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('切换首行缩进'));
+    await tester.tap(find.text('切换首行缩进 · 长按选择段落'));
     await tester.pumpAndSettle();
     expect(body.text, startsWith('　　入秋后'));
 
     await tester.tap(find.byTooltip('段落设置'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('显示段落标记'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('paragraph-number-1')), findsOneWidget);
+
+    await tester.tap(find.byTooltip('段落设置'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('行距 · 1.4 倍'));
     await tester.pumpAndSettle();
-    expect(controller.data.settings.lineHeight, 1.4);
+    expect(find.text('行距'), findsOneWidget);
+    await tester.tap(find.text('1.6 倍'));
+    await tester.pumpAndSettle();
+    expect(controller.data.settings.lineHeight, 1.6);
+
+    await tester.tap(find.byTooltip('段落设置'));
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('切换首行缩进 · 长按选择段落'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择缩进段落'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 900));
   });
 
@@ -478,8 +515,7 @@ void main() {
     expect(find.text('思维导图'), findsOneWidget);
     expect(find.text('流程图'), findsOneWidget);
     expect(find.text('管理时间线 · 2 条'), findsOneWidget);
-    expect(find.text('事件排序'), findsOneWidget);
-    expect(find.text('故事时间'), findsOneWidget);
+    expect(find.text('按总时间层级 ↑，同层按同时间排序 ↑'), findsOneWidget);
 
     final storyTitle = find.text('雾灯来信 · 情节');
     final storyTitleCenter = tester.getCenter(storyTitle);
@@ -528,6 +564,18 @@ void main() {
       find.descendant(of: dialog, matching: find.byType(TextField)).first,
       '角色引用测试',
     );
+    await tester.enterText(
+      find.byKey(const ValueKey('event-story-date')),
+      '秋十日',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('event-time-level')),
+      '10',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('event-same-time-order')),
+      '2',
+    );
     await tester.tap(
       find.descendant(
         of: dialog,
@@ -540,6 +588,9 @@ void main() {
 
     expect(controller.activeBook!.events.last.roleIds, ['role-1']);
     expect(controller.activeBook!.events.last.persons, '林照');
+    expect(controller.activeBook!.events.last.storyDate, '秋十日');
+    expect(controller.activeBook!.events.last.timeLevel, 10);
+    expect(controller.activeBook!.events.last.sameTimeOrder, 2);
     expect(tester.takeException(), isNull);
   });
 

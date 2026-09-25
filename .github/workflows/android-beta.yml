@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.15）
+        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.16）
         required: true
-        default: v0.4.0-dev.15
+        default: v0.4.0-dev.16
         type: string
 
 permissions:
@@ -41,6 +41,11 @@ jobs:
           expected_tag="v${version_name}"
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]] || [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
             echo "::error::当前版本为 $app_version，标签必须为 $expected_tag"
+            exit 1
+          fi
+          notes_path="docs/releases/${RELEASE_TAG}.md"
+          if [[ ! -s "$notes_path" ]]; then
+            echo "::error::缺少预发布说明：$notes_path"
             exit 1
           fi
 
@@ -131,6 +136,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "页间 ${RELEASE_TAG}" \
-            --generate-notes \
+            --notes-file "docs/releases/${RELEASE_TAG}.md" \
             --prerelease \
             --latest=false

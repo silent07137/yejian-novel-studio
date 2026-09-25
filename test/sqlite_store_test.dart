@@ -126,6 +126,9 @@ void main() {
     );
     expect(restored.books.single.worldFields.single.name, '保密等级');
     expect(restored.books.single.events.single.roleIds, ['role-1', 'role-2']);
+    expect(restored.books.single.events.single.timeLevel, 1);
+    expect(restored.books.single.events.single.sameTimeOrder, 1);
+    expect(restored.books.single.events.single.storyDate, '秋一日');
 
     data.books.single.title = '离线测试（修订）';
     data.books.single.chapters.single.body = '第二次事务保存。';

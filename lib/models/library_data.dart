@@ -542,8 +542,10 @@ class StoryEvent {
   StoryEvent({
     required this.id,
     required this.title,
-    required this.storyDate,
+    this.storyDate = '时间未定',
     this.order = 0,
+    this.timeLevel = 0,
+    this.sameTimeOrder = 0,
     this.description = '',
     this.chapterId,
     this.persons = '',
@@ -558,6 +560,8 @@ class StoryEvent {
   String title;
   String storyDate;
   double order;
+  int timeLevel;
+  int sameTimeOrder;
   String description;
   String? chapterId;
   String persons;
@@ -572,6 +576,8 @@ class StoryEvent {
     storyDate:
         json['storyDate'] as String? ?? json['date'] as String? ?? '时间未定',
     order: (json['order'] as num?)?.toDouble() ?? 0,
+    timeLevel: (json['timeLevel'] as num?)?.toInt() ?? 0,
+    sameTimeOrder: (json['sameTimeOrder'] as num?)?.toInt() ?? 0,
     description: json['description'] as String? ?? '',
     chapterId: json['chapterId'] as String? ?? json['chapter'] as String?,
     persons: json['persons'] as String? ?? '',
@@ -586,6 +592,8 @@ class StoryEvent {
     'title': title,
     'storyDate': storyDate,
     'order': order,
+    'timeLevel': timeLevel,
+    'sameTimeOrder': sameTimeOrder,
     'description': description,
     'chapterId': chapterId,
     'persons': persons,
@@ -594,6 +602,68 @@ class StoryEvent {
     'trackIds': trackIds,
     'roleIds': roleIds,
   };
+}
+
+int compareTimelineEvents(StoryEvent a, StoryEvent b) {
+  final byLevel = a.timeLevel.compareTo(b.timeLevel);
+  if (byLevel != 0) return byLevel;
+  final bySameTime = a.sameTimeOrder.compareTo(b.sameTimeOrder);
+  return bySameTime != 0 ? bySameTime : a.id.compareTo(b.id);
+}
+
+void normalizeTimelineEventOrder(List<StoryEvent> events) {
+  if (events.isEmpty) return;
+  final legacy = events.where((event) => event.timeLevel < 1).toList();
+  if (legacy.isNotEmpty) {
+    final groups = <String, List<StoryEvent>>{};
+    for (final event in legacy) {
+      groups.putIfAbsent(event.storyDate.trim(), () => []).add(event);
+    }
+    final dates = groups.keys.toList()
+      ..sort((a, b) {
+        final aOrder = groups[a]!
+            .map((event) => event.order)
+            .reduce((x, y) => x < y ? x : y);
+        final bOrder = groups[b]!
+            .map((event) => event.order)
+            .reduce((x, y) => x < y ? x : y);
+        final comparison = aOrder.compareTo(bOrder);
+        return comparison != 0 ? comparison : a.compareTo(b);
+      });
+    var nextLevel =
+        events
+            .where((event) => event.timeLevel > 0)
+            .fold<int>(
+              0,
+              (max, event) => event.timeLevel > max ? event.timeLevel : max,
+            ) +
+        1;
+    for (final date in dates) {
+      for (final event in groups[date]!) {
+        event.timeLevel = nextLevel;
+      }
+      nextLevel++;
+    }
+  }
+  final levels = <int, List<StoryEvent>>{};
+  for (final event in events) {
+    levels.putIfAbsent(event.timeLevel, () => []).add(event);
+  }
+  for (final group in levels.values) {
+    group.sort((a, b) => a.order.compareTo(b.order));
+    var nextOrder =
+        group
+            .where((event) => event.sameTimeOrder > 0)
+            .fold<int>(
+              0,
+              (max, event) =>
+                  event.sameTimeOrder > max ? event.sameTimeOrder : max,
+            ) +
+        1;
+    for (final event in group) {
+      if (event.sameTimeOrder < 1) event.sameTimeOrder = nextOrder++;
+    }
+  }
 }
 
 class StoryLink {
@@ -715,7 +785,9 @@ class Book {
        clues = clues ?? [],
        notes = notes ?? [],
        createdAt = createdAt ?? DateTime.now(),
-       updatedAt = updatedAt ?? DateTime.now();
+       updatedAt = updatedAt ?? DateTime.now() {
+    normalizeTimelineEventOrder(this.events);
+  }
 
   String id;
   String title;
