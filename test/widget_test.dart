@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -159,6 +160,72 @@ void main() {
     await tester.pumpAndSettle();
     expect(body.selection, const TextSelection(baseOffset: 0, extentOffset: 4));
     await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('正文可以应用 Markdown 格式并切换预览', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = tester
+        .widget<TextField>(find.byType(TextField).last)
+        .controller!;
+    body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    await tester.tap(find.byKey(const ValueKey('markdown-format-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加粗'));
+    await tester.pumpAndSettle();
+    expect(controller.activeChapter!.body, startsWith('**入秋后的**'));
+
+    await tester.tap(find.byKey(const ValueKey('markdown-preview-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('markdown-preview')), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('markdown-preview-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNWidgets(2));
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('Markdown 预览把图片放在上下正文之间', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final temporary = Directory.systemTemp.createTempSync('yejian-preview-');
+    addTearDown(() => temporary.delete(recursive: true));
+    final image = File('${temporary.path}${Platform.pathSeparator}scene.png');
+    image.writeAsBytesSync(base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+      'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+    ));
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final chapter = data.books.first.chapters.first;
+    chapter.body = '上文\n\n![场景](yejian-image:image-1)\n\n下文';
+    chapter.images.add(ChapterImage(id: 'image-1', path: image.path, alt: '场景'));
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('markdown-preview-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('上文'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
+    expect(find.text('下文'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
   });
 
   testWidgets('段落菜单可切换首行缩进与行距', (tester) async {

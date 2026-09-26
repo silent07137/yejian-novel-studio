@@ -291,6 +291,15 @@ class SqliteStore implements DataStore {
           .putIfAbsent(chapterId, () => [])
           .add(ChapterMarker.fromJson(payload));
     }
+    final imagesByChapter = <String, List<ChapterImage>>{};
+    for (final payload
+        in grouped['chapter_image'] ?? const <Map<String, dynamic>>[]) {
+      final chapterId = payload['chapterId'] as String?;
+      if (chapterId == null) continue;
+      imagesByChapter
+          .putIfAbsent(chapterId, () => [])
+          .add(ChapterImage.fromJson(payload));
+    }
     return Book(
       id: projectId,
       title: row['title']! as String,
@@ -320,6 +329,7 @@ class SqliteStore implements DataStore {
               exportEnabled: (item['export_enabled'] as int? ?? 1) == 1,
               sortIndex: item['sort_index'] as int? ?? 0,
               markers: markersByChapter[item['id']],
+              images: imagesByChapter[item['id']],
               updatedAt: DateTime.tryParse(item['updated_at'] as String? ?? ''),
             ),
           )
@@ -531,6 +541,11 @@ class SqliteStore implements DataStore {
       for (final chapter in book.chapters)
         for (final marker in chapter.markers)
           {...marker.toJson(), 'chapterId': chapter.id},
+    ], (value) => value);
+    await _saveStructured(txn, book.id, 'chapter_image', [
+      for (final chapter in book.chapters)
+        for (final image in chapter.images)
+          {...image.toJson(), 'chapterId': chapter.id},
     ], (value) => value);
   }
 

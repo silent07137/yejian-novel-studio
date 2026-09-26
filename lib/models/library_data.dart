@@ -89,8 +89,10 @@ class Chapter {
     this.exportEnabled = true,
     this.sortIndex = 0,
     List<ChapterMarker>? markers,
+    List<ChapterImage>? images,
     DateTime? updatedAt,
   }) : markers = markers ?? [],
+       images = images ?? [],
        updatedAt = updatedAt ?? DateTime.now();
 
   String id;
@@ -102,9 +104,12 @@ class Chapter {
   bool exportEnabled;
   int sortIndex;
   List<ChapterMarker> markers;
+  List<ChapterImage> images;
   DateTime updatedAt;
 
-  int get wordCount => countWords(body);
+  int get wordCount => countWords(
+    body.replaceAll(RegExp(r'!\[[^\]]*\]\(yejian-image:[A-Za-z0-9-]+\)'), ''),
+  );
 
   factory Chapter.fromJson(Map<String, dynamic> json) => Chapter(
     id: json['id'] as String,
@@ -117,6 +122,9 @@ class Chapter {
     sortIndex: (json['sortIndex'] as num?)?.toInt() ?? 0,
     markers: (json['markers'] as List<dynamic>? ?? [])
         .map((item) => ChapterMarker.fromJson(item as Map<String, dynamic>))
+        .toList(),
+    images: (json['images'] as List<dynamic>? ?? [])
+        .map((item) => ChapterImage.fromJson(item as Map<String, dynamic>))
         .toList(),
     updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? ''),
   );
@@ -131,8 +139,25 @@ class Chapter {
     'exportEnabled': exportEnabled,
     'sortIndex': sortIndex,
     'markers': markers.map((marker) => marker.toJson()).toList(),
+    'images': images.map((image) => image.toJson()).toList(),
     'updatedAt': updatedAt.toIso8601String(),
   };
+}
+
+class ChapterImage {
+  ChapterImage({required this.id, required this.path, this.alt = ''});
+
+  String id;
+  String path;
+  String alt;
+
+  factory ChapterImage.fromJson(Map<String, dynamic> json) => ChapterImage(
+    id: json['id'] as String,
+    path: json['path'] as String? ?? '',
+    alt: json['alt'] as String? ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {'id': id, 'path': path, 'alt': alt};
 }
 
 /// A bookmark in chapter prose. [start] and [end] use Dart string offsets.

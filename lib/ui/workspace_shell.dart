@@ -1,6 +1,8 @@
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
@@ -1974,6 +1976,7 @@ class _EditorPaneState extends State<_EditorPane> {
   final GlobalKey _bodyFieldKey = GlobalKey();
   bool _showParagraphNumbers = false;
   bool _markerPreviewOpen = false;
+  bool _markdownPreview = false;
 
   @override
   void initState() {
@@ -1997,6 +2000,133 @@ class _EditorPaneState extends State<_EditorPane> {
     final composing = _bodyController.value.composing;
     if (composing.isValid && !composing.isCollapsed) return;
     widget.controller.updateChapterBody(_bodyController.text);
+  }
+
+  void _wrapMarkdown(String before, String after, String placeholder) {
+    final value = _bodyController.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    final start = selection.start;
+    final end = selection.end;
+    final selected = value.text.substring(start, end);
+    final content = selected.isEmpty ? placeholder : selected;
+    final replacement = '$before$content$after';
+    final text = value.text.replaceRange(start, end, replacement);
+    _bodyController.value = value.copyWith(
+      text: text,
+      selection: TextSelection(
+        baseOffset: start + before.length,
+        extentOffset: start + before.length + content.length,
+      ),
+      composing: TextRange.empty,
+    );
+    _bodyFocusNode.requestFocus();
+  }
+
+  void _prefixMarkdownLine(String prefix) {
+    final value = _bodyController.value;
+    final offset = value.selection.isValid
+        ? value.selection.start
+        : value.text.length;
+    final previousBreak = offset == 0
+        ? -1
+        : value.text.lastIndexOf('\n', offset - 1);
+    final lineStart = previousBreak + 1;
+    _bodyController.value = value.copyWith(
+      text: value.text.replaceRange(lineStart, lineStart, prefix),
+      selection: TextSelection.collapsed(offset: offset + prefix.length),
+      composing: TextRange.empty,
+    );
+    _bodyFocusNode.requestFocus();
+  }
+
+  void _applyMarkdownAction(String action) {
+    switch (action) {
+      case 'heading':
+        _prefixMarkdownLine('## ');
+      case 'quote':
+        _prefixMarkdownLine('> ');
+      case 'list':
+        _prefixMarkdownLine('- ');
+      case 'bold':
+        _wrapMarkdown('**', '**', '加粗文字');
+      case 'italic':
+        _wrapMarkdown('*', '*', '斜体文字');
+      case 'code':
+        _wrapMarkdown('`', '`', '代码');
+      case 'image':
+        _insertChapterImage();
+    }
+  }
+
+  Future<void> _insertChapterImage() async {
+    final selection = _bodyController.selection;
+    final offset = selection.isValid
+        ? selection.start
+        : _bodyController.text.length;
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(
+            label: '正文图片',
+            extensions: ['png', 'jpg', 'jpeg', 'webp'],
+            mimeTypes: ['image/png', 'image/jpeg', 'image/webp'],
+          ),
+        ],
+      );
+      if (file == null || !mounted) return;
+      if (await file.length() > ProjectArchive.maxAssetBytes) {
+        throw StateError('图片超过 32 MB，请选择较小的图片');
+      }
+      if (!mounted) return;
+      final caption = TextEditingController();
+      final alt = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('插入正文图片'),
+          content: TextField(
+            controller: caption,
+            autofocus: true,
+            maxLength: 120,
+            decoration: const InputDecoration(labelText: '图片说明（可选）'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, caption.text),
+              child: const Text('插入'),
+            ),
+          ],
+        ),
+      );
+      caption.dispose();
+      if (alt == null || !mounted) return;
+      final insertion = await widget.controller.insertChapterImageBytes(
+        await file.readAsBytes(),
+        offset: offset,
+        alt: alt,
+      );
+      if (!mounted) return;
+      setState(() => _markdownPreview = false);
+      _bodyController.value = TextEditingValue(
+        text: insertion.body,
+        selection: TextSelection.collapsed(offset: insertion.caretOffset),
+      );
+      _bodyFocusNode.requestFocus();
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error is StateError ? error.message.toString() : '图片插入失败',
+          ),
+        ),
+      );
+    }
   }
 
   void _onBodyScroll() {
@@ -2757,6 +2887,7 @@ class _EditorPaneState extends State<_EditorPane> {
         .where((item) => item.id == selectedId)
         .firstOrNull;
     if (marker == null) return;
+    if (_markdownPreview) setState(() => _markdownPreview = false);
     _bodyFocusNode.requestFocus();
     _bodyController.selection = TextSelection(
       baseOffset: marker.start.clamp(0, _bodyController.text.length),
@@ -2787,7 +2918,7 @@ class _EditorPaneState extends State<_EditorPane> {
         children: [
           Container(
             height: 50,
-            padding: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(color: Theme.of(context).dividerColor),
@@ -2801,6 +2932,9 @@ class _EditorPaneState extends State<_EditorPane> {
                     onPressed: _showChapterDirectory,
                     icon: const Icon(Icons.menu_book_outlined, size: 20),
                     label: const Text('目录'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                    ),
                   ),
                 if (!compact) ...[
                   IconButton(
@@ -2829,25 +2963,72 @@ class _EditorPaneState extends State<_EditorPane> {
                   ),
                 ],
                 const Spacer(),
-                Text(
-                  '${widget.chapter.wordCount} 字',
-                  style: Theme.of(context).textTheme.bodySmall,
+                if (MediaQuery.sizeOf(context).width >= 390)
+                  Text(
+                    '${widget.chapter.wordCount} 字',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                PopupMenuButton<String>(
+                  key: const ValueKey('markdown-format-menu'),
+                  tooltip: 'Markdown 格式',
+                  icon: const Icon(Icons.code_rounded),
+                  padding: EdgeInsets.zero,
+                  onSelected: _applyMarkdownAction,
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'heading', child: Text('标题 H2')),
+                    PopupMenuItem(value: 'bold', child: Text('加粗')),
+                    PopupMenuItem(value: 'italic', child: Text('斜体')),
+                    PopupMenuItem(value: 'quote', child: Text('引用')),
+                    PopupMenuItem(value: 'list', child: Text('列表')),
+                    PopupMenuItem(value: 'code', child: Text('行内代码')),
+                    PopupMenuDivider(),
+                    PopupMenuItem(value: 'image', child: Text('插入图片')),
+                  ],
+                ),
+                IconButton(
+                  key: const ValueKey('markdown-preview-toggle'),
+                  tooltip: _markdownPreview ? '编辑 Markdown' : '预览 Markdown',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 44,
+                    height: 44,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: () {
+                    if (!_markdownPreview) FocusScope.of(context).unfocus();
+                    setState(() => _markdownPreview = !_markdownPreview);
+                  },
+                  icon: Icon(
+                    _markdownPreview
+                        ? Icons.edit_outlined
+                        : Icons.visibility_outlined,
+                  ),
                 ),
                 IconButton(
                   key: const ValueKey('add-chapter-marker'),
                   tooltip: '添加标注',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 44,
+                    height: 44,
+                  ),
+                  padding: EdgeInsets.zero,
                   onPressed: _addMarker,
                   icon: const Icon(Icons.bookmark_add_outlined),
                 ),
                 IconButton(
                   key: const ValueKey('open-chapter-markers'),
                   tooltip: '正文标注',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 44,
+                    height: 44,
+                  ),
+                  padding: EdgeInsets.zero,
                   onPressed: _showMarkers,
                   icon: const Icon(Icons.bookmarks_outlined),
                 ),
                 PopupMenuButton<String>(
                   tooltip: '段落设置',
                   icon: const Icon(Icons.format_align_left_rounded),
+                  padding: EdgeInsets.zero,
                   onSelected: (value) {
                     if (value == 'indent') {
                       _toggleIndent();
@@ -2914,74 +3095,137 @@ class _EditorPaneState extends State<_EditorPane> {
                       ),
                       const SizedBox(height: 18),
                       Expanded(
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final bodyStyle = TextStyle(
-                              fontSize: settings.fontSize,
-                              height: settings.lineHeight,
-                              letterSpacing: .15,
-                            );
-                            return Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Positioned.fill(
-                                  child: TextField(
-                                    key: _bodyFieldKey,
-                                    controller: _bodyController,
-                                    scrollController: _bodyScrollController,
-                                    focusNode: _bodyFocusNode,
-                                    undoController: _undoController,
-                                    expands: true,
-                                    maxLines: null,
-                                    minLines: null,
-                                    textAlignVertical: TextAlignVertical.top,
-                                    keyboardType: TextInputType.multiline,
-                                    style: bodyStyle,
-                                    onTap: () => WidgetsBinding.instance
-                                        .addPostFrameCallback((_) {
-                                          if (mounted) _showMarkerAtCursor();
-                                        }),
-                                    contextMenuBuilder: (context, editable) {
-                                      final items = editable
-                                          .contextMenuButtonItems
-                                          .toList();
-                                      if (!_bodyController
-                                          .selection
-                                          .isCollapsed) {
-                                        items.add(
-                                          ContextMenuButtonItem(
-                                            label: '添加标注',
-                                            onPressed: () {
-                                              editable.hideToolbar();
-                                              _addMarker();
-                                            },
+                        child: _markdownPreview
+                            ? SingleChildScrollView(
+                                key: const ValueKey('markdown-preview'),
+                                child: MarkdownBody(
+                                  data: _bodyController.text,
+                                  selectable: true,
+                                  softLineBreak: true,
+                                  styleSheet:
+                                      MarkdownStyleSheet.fromTheme(
+                                        Theme.of(context),
+                                      ).copyWith(
+                                        p: TextStyle(
+                                          fontSize: settings.fontSize,
+                                          height: settings.lineHeight,
+                                        ),
+                                      ),
+                                  imageBuilder: (uri, title, alt) {
+                                    if (uri.scheme != 'yejian-image') {
+                                      return Text('外部图片暂不预览：${alt ?? uri}');
+                                    }
+                                    final image = widget.chapter.images
+                                        .where((item) => item.id == uri.path)
+                                        .firstOrNull;
+                                    if (image == null || image.path.isEmpty) {
+                                      return const Text('〔图片文件未找到〕');
+                                    }
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Image.file(
+                                            File(image.path),
+                                            fit: BoxFit.contain,
+                                            errorBuilder: (_, _, _) =>
+                                                const Text('〔图片无法读取〕'),
                                           ),
-                                        );
-                                      }
-                                      return AdaptiveTextSelectionToolbar.buttonItems(
-                                        anchors: editable.contextMenuAnchors,
-                                        buttonItems: items,
-                                      );
-                                    },
-                                    decoration: const InputDecoration(
-                                      hintText: '从这里开始写……',
-                                      border: InputBorder.none,
-                                      enabledBorder: InputBorder.none,
-                                      focusedBorder: InputBorder.none,
-                                      filled: false,
-                                      contentPadding: EdgeInsets.zero,
-                                    ),
-                                  ),
+                                          if ((alt ?? image.alt).isNotEmpty)
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 6,
+                                              ),
+                                              child: Text(
+                                                alt ?? image.alt,
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    );
+                                  },
                                 ),
-                                if (_showParagraphNumbers)
-                                  ..._paragraphNumberLabels(
-                                    context,
-                                    constraints,
-                                  ),
-                              ],
-                            );
-                          },
-                        ),
+                              )
+                            : LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final bodyStyle = TextStyle(
+                                    fontSize: settings.fontSize,
+                                    height: settings.lineHeight,
+                                    letterSpacing: .15,
+                                  );
+                                  return Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      Positioned.fill(
+                                        child: TextField(
+                                          key: _bodyFieldKey,
+                                          controller: _bodyController,
+                                          scrollController:
+                                              _bodyScrollController,
+                                          focusNode: _bodyFocusNode,
+                                          undoController: _undoController,
+                                          expands: true,
+                                          maxLines: null,
+                                          minLines: null,
+                                          textAlignVertical:
+                                              TextAlignVertical.top,
+                                          keyboardType: TextInputType.multiline,
+                                          style: bodyStyle,
+                                          onTap: () => WidgetsBinding.instance
+                                              .addPostFrameCallback((_) {
+                                                if (mounted) {
+                                                  _showMarkerAtCursor();
+                                                }
+                                              }),
+                                          contextMenuBuilder: (context, editable) {
+                                            final items = editable
+                                                .contextMenuButtonItems
+                                                .toList();
+                                            if (!_bodyController
+                                                .selection
+                                                .isCollapsed) {
+                                              items.add(
+                                                ContextMenuButtonItem(
+                                                  label: '添加标注',
+                                                  onPressed: () {
+                                                    editable.hideToolbar();
+                                                    _addMarker();
+                                                  },
+                                                ),
+                                              );
+                                            }
+                                            return AdaptiveTextSelectionToolbar.buttonItems(
+                                              anchors:
+                                                  editable.contextMenuAnchors,
+                                              buttonItems: items,
+                                            );
+                                          },
+                                          decoration: const InputDecoration(
+                                            hintText: '从这里开始写……',
+                                            border: InputBorder.none,
+                                            enabledBorder: InputBorder.none,
+                                            focusedBorder: InputBorder.none,
+                                            filled: false,
+                                            contentPadding: EdgeInsets.zero,
+                                          ),
+                                        ),
+                                      ),
+                                      if (_showParagraphNumbers)
+                                        ..._paragraphNumberLabels(
+                                          context,
+                                          constraints,
+                                        ),
+                                    ],
+                                  );
+                                },
+                              ),
                       ),
                     ],
                   ),
@@ -3564,7 +3808,7 @@ class _ExportPageState extends State<ExportPage> {
           _ExportCard(
             icon: Icons.code_rounded,
             title: 'Markdown',
-            text: '使用卷、章标题层级保存正文。',
+            text: '按卷、章层级导出；含正文图片时保存为 ZIP。',
             button: '保存 Markdown',
             onPressed:
                 widget.controller.activeBook?.chapters.any(
@@ -4055,7 +4299,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.20 (22)';
+  static const _version = '0.4.0-dev.21 (23)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4082,6 +4326,9 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.21\n'
+            '· 正文支持 Markdown 格式编辑与预览\n'
+            '· 可插入独立段落图片，随工程备份并支持带图 Markdown 导出\n\n'
             '0.4.0-dev.20\n'
             '· 修复 Android 工程导入误判文件后缀，单书与多书均可正常导入\n\n'
             '0.4.0-dev.19\n'
@@ -4510,7 +4757,10 @@ class _ProfileStat extends StatelessWidget {
 }
 
 class _ContentPage extends StatelessWidget {
-  const _ContentPage({required this.child, this.reserveFloatingNavigation = false});
+  const _ContentPage({
+    required this.child,
+    this.reserveFloatingNavigation = false,
+  });
 
   final Widget child;
   final bool reserveFloatingNavigation;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../data/local_store.dart';
 import '../domain/entity_id.dart';
+import '../domain/chapter_markdown.dart';
 import '../domain/project_archive.dart';
 import '../models/library_data.dart';
 import '../platform/document_saver.dart';
@@ -50,6 +52,7 @@ class AppController extends ChangeNotifier {
   String? selectedChapterId;
   String? loadedFontFamily;
   Timer? _saveTimer;
+  bool _disposed = false;
   final List<WorkspacePage> _pageHistory = [];
 
   Book? get activeBook {
@@ -377,11 +380,23 @@ class AppController extends ChangeNotifier {
     final source = _chapterById(chapterId);
     if (book == null || source == null) return;
     final index = book.chapters.indexOf(source);
+    var duplicatedBody = source.body;
+    final duplicatedImages = <ChapterImage>[];
+    for (final image in source.images) {
+      final newId = newEntityId('image');
+      duplicatedBody = duplicatedBody.replaceAll(
+        'yejian-image:${image.id}',
+        'yejian-image:$newId',
+      );
+      duplicatedImages.add(
+        ChapterImage(id: newId, path: image.path, alt: image.alt),
+      );
+    }
     final copy = Chapter(
       id: newEntityId('chapter'),
       title: '${source.title}（副本）',
       volumeId: source.volumeId,
-      body: source.body,
+      body: duplicatedBody,
       summary: source.summary,
       status: '草稿',
       exportEnabled: source.exportEnabled,
@@ -398,6 +413,7 @@ class AppController extends ChangeNotifier {
             referenceId: marker.referenceId,
           ),
       ],
+      images: duplicatedImages,
     );
     book.chapters.insert(index + 1, copy);
     selectedChapterId = copy.id;
@@ -914,6 +930,84 @@ class AppController extends ChangeNotifier {
     _touchBook();
   }
 
+  Future<ImageInsertion> insertChapterImageBytes(
+    Uint8List bytes, {
+    required int offset,
+    String alt = '',
+  }) async {
+    final chapter = activeChapter;
+    if (chapter == null) throw StateError('请先选择章节');
+    if (bytes.length > ProjectArchive.maxAssetBytes) {
+      throw StateError('图片超过 32 MB，请选择较小的图片');
+    }
+    final extension = _imageExtensionFromBytes(bytes);
+    if (extension == null) {
+      throw StateError('仅支持 PNG、JPEG 和 WebP 图片');
+    }
+    final image = ChapterImage(
+      id: newEntityId('image'),
+      path: '',
+      alt: alt.trim(),
+    );
+    final support =
+        projectAssetDirectory ?? await getApplicationSupportDirectory();
+    final directory = Directory(
+      '${support.path}${Platform.pathSeparator}yejian'
+      '${Platform.pathSeparator}chapter-images',
+    );
+    await directory.create(recursive: true);
+    final file = File(
+      '${directory.path}${Platform.pathSeparator}${image.id}.$extension',
+    );
+    var imageAdded = false;
+    try {
+      await file.writeAsBytes(bytes, flush: true);
+      if (activeChapter?.id != chapter.id) {
+        throw StateError('当前章节已切换，请重新插入图片');
+      }
+      image.path = file.path;
+      final insertion = insertChapterImageReference(
+        chapter.body,
+        offset,
+        image,
+      );
+      chapter.images.add(image);
+      imageAdded = true;
+      updateChapterBody(insertion.body);
+      return insertion;
+    } on Object {
+      if (imageAdded) chapter.images.remove(image);
+      if (await file.exists()) await file.delete();
+      rethrow;
+    }
+  }
+
+  String? _imageExtensionFromBytes(Uint8List bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4e &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0d &&
+        bytes[5] == 0x0a &&
+        bytes[6] == 0x1a &&
+        bytes[7] == 0x0a) {
+      return 'png';
+    }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xff &&
+        bytes[1] == 0xd8 &&
+        bytes[2] == 0xff) {
+      return 'jpg';
+    }
+    if (bytes.length >= 12 &&
+        String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF' &&
+        String.fromCharCodes(bytes.sublist(8, 12)) == 'WEBP') {
+      return 'webp';
+    }
+    return null;
+  }
+
   void _relocateChapterMarkers(
     List<ChapterMarker> markers,
     String oldText,
@@ -1144,6 +1238,19 @@ class AppController extends ChangeNotifier {
             createdAssets,
           );
         }
+        for (final chapter in book.chapters) {
+          for (final image in chapter.images) {
+            final bytes = project.chapterImages[image.id];
+            if (bytes == null) {
+              throw const ProjectArchiveException('工程正文图片缺失，已取消导入');
+            }
+            image.path = await _storeImportedAsset(
+              bytes,
+              project.chapterImageExtensions[image.id] ?? 'bin',
+              createdAssets,
+            );
+          }
+        }
         final index = candidate.books.indexWhere((item) => item.id == book.id);
         if (index < 0) {
           candidate.books.add(book);
@@ -1219,6 +1326,9 @@ class AppController extends ChangeNotifier {
         for (final marker in item.markers) {
           check('chapter_marker', marker.id);
         }
+        for (final image in item.images) {
+          check('chapter_image', image.id);
+        }
       }
       for (final item in book.roles) {
         check('role', item.id);
@@ -1269,13 +1379,55 @@ class AppController extends ChangeNotifier {
     if (book == null) {
       return const DocumentSaveResult.failed('当前没有可导出的作品');
     }
-    final name = '${_safeFileName(book.title)}.md';
-    return documentSaver.save(
-      bytes: Uint8List.fromList(utf8.encode(buildMarkdown(book))),
-      suggestedName: name,
-      mimeType: 'text/markdown',
-      extensions: const ['md', 'markdown'],
-    );
+    final usedImages = <String, ChapterImage>{};
+    for (final chapter in _exportableChapters(book)) {
+      final referenced = referencedChapterImageIds(chapter.body);
+      for (final image in chapter.images) {
+        if (referenced.contains(image.id)) usedImages[image.id] = image;
+      }
+    }
+    final baseName = _safeFileName(book.title);
+    if (usedImages.isEmpty) {
+      return documentSaver.save(
+        bytes: Uint8List.fromList(utf8.encode(buildMarkdown(book))),
+        suggestedName: '$baseName.md',
+        mimeType: 'text/markdown',
+        extensions: const ['md', 'markdown'],
+      );
+    }
+    try {
+      final archive = Archive();
+      final imagePaths = <String, String>{};
+      for (final image in usedImages.values) {
+        final file = File(image.path);
+        if (!await file.exists() ||
+            await file.length() > ProjectArchive.maxAssetBytes) {
+          return const DocumentSaveResult.failed('正文图片丢失或超过 32 MB，无法完整导出');
+        }
+        final extension = image.path.split('.').last.toLowerCase();
+        final safeExtension = {'png', 'jpg', 'jpeg', 'webp'}.contains(extension)
+            ? extension
+            : 'bin';
+        final path = 'assets/${image.id}.$safeExtension';
+        imagePaths[image.id] = path;
+        archive.add(ArchiveFile.bytes(path, await file.readAsBytes()));
+      }
+      archive.add(
+        ArchiveFile.bytes(
+          '$baseName.md',
+          utf8.encode(buildMarkdown(book, imagePaths: imagePaths)),
+        ),
+      );
+      final bytes = ZipEncoder().encodeBytes(archive);
+      return await documentSaver.save(
+        bytes: bytes,
+        suggestedName: '$baseName-Markdown.zip',
+        mimeType: 'application/zip',
+        extensions: const ['zip'],
+      );
+    } on FileSystemException {
+      return const DocumentSaveResult.failed('无法读取正文图片，Markdown 未导出');
+    }
   }
 
   void _touchBook() {
@@ -1303,7 +1455,7 @@ class AppController extends ChangeNotifier {
     } on Object {
       saveState = SaveState.failed;
     }
-    notifyListeners();
+    if (!_disposed) notifyListeners();
   }
 
   String _safeFileName(String value) =>
@@ -1311,6 +1463,7 @@ class AppController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     if (_saveTimer?.isActive ?? false) {
       unawaited(flush());
     }
@@ -1337,12 +1490,12 @@ String buildPlainText(Book book) {
       ..writeln()
       ..writeln(chapter.title)
       ..writeln()
-      ..writeln(chapter.body);
+      ..writeln(plainTextFromMarkdown(chapter.body));
   }
   return buffer.toString().trimRight();
 }
 
-String buildMarkdown(Book book) {
+String buildMarkdown(Book book, {Map<String, String> imagePaths = const {}}) {
   final buffer = StringBuffer()..writeln('# ${book.title}');
   String? lastVolumeId;
   for (final chapter in _exportableChapters(book)) {
@@ -1361,7 +1514,7 @@ String buildMarkdown(Book book) {
       ..writeln()
       ..writeln('### ${chapter.title}')
       ..writeln()
-      ..writeln(chapter.body);
+      ..writeln(markdownForExternalExport(chapter.body, imagePaths));
   }
   return buffer.toString().trimRight();
 }

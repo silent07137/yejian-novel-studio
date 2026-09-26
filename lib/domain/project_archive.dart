@@ -25,6 +25,8 @@ class ProjectArchiveData {
     required this.coverExtensions,
     required this.avatar,
     required this.avatarExtension,
+    this.chapterImages = const {},
+    this.chapterImageExtensions = const {},
     this.isLegacy = false,
   });
 
@@ -35,6 +37,8 @@ class ProjectArchiveData {
   final Map<String, String> coverExtensions;
   final Uint8List? avatar;
   final String? avatarExtension;
+  final Map<String, Uint8List> chapterImages;
+  final Map<String, String> chapterImageExtensions;
   final bool isLegacy;
 }
 
@@ -42,7 +46,7 @@ class ProjectArchiveData {
 /// extracted directly to disk; only validated, named assets are restored.
 class ProjectArchive {
   static const format = 'yejian-project';
-  static const version = 1;
+  static const version = 2;
   static const maxArchiveBytes = 128 * 1024 * 1024;
   static const maxContentBytes = 64 * 1024 * 1024;
   static const maxAssetBytes = 32 * 1024 * 1024;
@@ -63,8 +67,30 @@ class ProjectArchive {
     final archive = Archive();
     final assets = <String, Map<String, String>>{};
     final bookPayloads = <Map<String, dynamic>>[];
+    final imageIds = <String>{};
     for (final (index, book) in books.indexed) {
       final payload = book.toJson()..['coverPath'] = null;
+      final chapters = payload['chapters'] as List<dynamic>;
+      for (final (chapterIndex, chapter) in book.chapters.indexed) {
+        final chapterPayload = chapters[chapterIndex] as Map<String, dynamic>;
+        final images = chapterPayload['images'] as List<dynamic>;
+        for (final (imageIndex, image) in chapter.images.indexed) {
+          if (image.id.isEmpty || !imageIds.add(image.id)) {
+            throw const ProjectArchiveException('正文图片 ID 无效或重复');
+          }
+          final bytes = await _readAsset(image.path, '正文图片');
+          final extension = _imageExtension(image.path);
+          final entry =
+              'assets/chapter-$index-$chapterIndex-$imageIndex.$extension';
+          archive.add(ArchiveFile.bytes(entry, bytes));
+          assets['image:${image.id}'] = {
+            'path': entry,
+            'sha256': _hash(bytes),
+            'extension': extension,
+          };
+          (images[imageIndex] as Map<String, dynamic>)['path'] = null;
+        }
+      }
       bookPayloads.add(payload);
       if (book.coverPath case final String path when path.isNotEmpty) {
         final bytes = await _readAsset(path, '《${book.title}》的封面');
@@ -163,7 +189,8 @@ class ProjectArchive {
       if (manifest['format'] != format) {
         throw const ProjectArchiveException('不是页间工程文件');
       }
-      if (manifest['formatVersion'] != version) {
+      final formatVersion = manifest['formatVersion'];
+      if (formatVersion != 1 && formatVersion != version) {
         throw const ProjectArchiveException('工程格式版本不受支持，请更新应用');
       }
       final kind = manifest['kind'];
@@ -188,9 +215,24 @@ class ProjectArchive {
       }
       final covers = <String, Uint8List>{};
       final coverExtensions = <String, String>{};
+      final chapterImages = <String, Uint8List>{};
+      final chapterImageExtensions = <String, String>{};
       Uint8List? avatar;
       String? avatarExtension;
       final bookIds = books.map((book) => book.id).toSet();
+      final imageIds = <String>{};
+      for (final book in books) {
+        for (final chapter in book.chapters) {
+          for (final image in chapter.images) {
+            if (image.id.isEmpty || !imageIds.add(image.id)) {
+              throw const ProjectArchiveException('工程正文图片 ID 无效或重复');
+            }
+          }
+        }
+      }
+      if (formatVersion == 1 && imageIds.isNotEmpty) {
+        throw const ProjectArchiveException('旧版工程包含不受支持的正文图片');
+      }
       final referencedFiles = <String>{'manifest.json', 'content.json'};
       for (final entry in assetsJson.entries) {
         final description = entry.value;
@@ -218,12 +260,21 @@ class ProjectArchive {
           final bookId = entry.key.substring(6);
           covers[bookId] = asset;
           coverExtensions[bookId] = extension;
+        } else if (entry.key.startsWith('image:') &&
+            formatVersion == version &&
+            imageIds.contains(entry.key.substring(6))) {
+          final imageId = entry.key.substring(6);
+          chapterImages[imageId] = asset;
+          chapterImageExtensions[imageId] = extension;
         } else {
           throw const ProjectArchiveException('工程资源归属无效');
         }
       }
       if (files.keys.any((path) => !referencedFiles.contains(path))) {
         throw const ProjectArchiveException('工程文件包含未声明的内容');
+      }
+      if (imageIds.any((id) => !chapterImages.containsKey(id))) {
+        throw const ProjectArchiveException('工程正文图片缺失');
       }
       return ProjectArchiveData(
         isCollection: isCollection,
@@ -233,6 +284,8 @@ class ProjectArchive {
         coverExtensions: coverExtensions,
         avatar: avatar,
         avatarExtension: avatarExtension,
+        chapterImages: chapterImages,
+        chapterImageExtensions: chapterImageExtensions,
       );
     } on ProjectArchiveException {
       rethrow;
@@ -259,6 +312,11 @@ class ProjectArchive {
           : _booksFromContent({
               'books': [payload['book']],
             }, isCollection: false);
+      for (final book in books) {
+        for (final chapter in book.chapters) {
+          chapter.images.clear();
+        }
+      }
       final profileJson = isCollection
           ? (library as Map<String, dynamic>)['profile']
           : payload['profile'];

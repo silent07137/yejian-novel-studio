@@ -93,6 +93,96 @@ void main() {
     );
   });
 
+  test('正文图片随 .sns 备份、恢复且不泄漏本机路径', () async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final chapter = data.books.first.chapters.first;
+    final image = File('${temporary.path}${Platform.pathSeparator}scene.png');
+    final imageBytes = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+      'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+    );
+    await image.writeAsBytes(imageBytes);
+    chapter.images.add(
+      ChapterImage(id: 'image-1', path: image.path, alt: '场景'),
+    );
+    chapter.body = '上文\n\n![场景](yejian-image:image-1)\n\n下文';
+
+    final bytes = await ProjectArchive.encode(
+      books: [data.books.first],
+      profile: data.profile,
+      isCollection: false,
+    );
+    final project = ProjectArchive.decode(bytes, fileName: 'with-image.sns');
+    expect(project.chapterImages['image-1'], imageBytes);
+    expect(project.books.single.chapters.first.images.single.path, isEmpty);
+    expect(project.books.single.chapters.first.body, chapter.body);
+    expect(
+      utf8.decode(bytes, allowMalformed: true),
+      isNot(contains(image.path)),
+    );
+
+    final store = _MemoryStore(LibraryData.empty());
+    final controller = AppController(
+      store: store,
+      data: store.data,
+      projectAssetDirectory: temporary,
+    );
+    await controller.importProjectArchive(project, replaceExisting: false);
+    final restored = controller.data.books.single.chapters.first.images.single;
+    expect(await File(restored.path).readAsBytes(), imageBytes);
+    expect(restored.path, isNot(image.path));
+    controller.dispose();
+  });
+
+  test('旧版 ZIP 工程仍可导入，正文图片资源缺失时拒绝导入', () async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final bytes = await ProjectArchive.encode(
+      books: [data.books.first],
+      profile: data.profile,
+      isCollection: false,
+    );
+    final oldZip = Archive();
+    for (final file in ZipDecoder().decodeBytes(bytes)) {
+      final contents = file.readBytes()!;
+      if (file.name == 'manifest.json') {
+        final manifest =
+            jsonDecode(utf8.decode(contents)) as Map<String, dynamic>;
+        manifest['formatVersion'] = 1;
+        oldZip.add(
+          ArchiveFile.bytes(file.name, utf8.encode(jsonEncode(manifest))),
+        );
+      } else {
+        oldZip.add(ArchiveFile.bytes(file.name, contents));
+      }
+    }
+    expect(
+      ProjectArchive.decode(ZipEncoder().encodeBytes(oldZip)).books.single.id,
+      data.books.first.id,
+    );
+
+    final image = File('${temporary.path}${Platform.pathSeparator}scene.png');
+    await image.writeAsBytes([0x89, 0x50, 0x4e, 0x47]);
+    data.books.first.chapters.first.images.add(
+      ChapterImage(id: 'image-1', path: image.path),
+    );
+    final withImage = ZipDecoder().decodeBytes(
+      await ProjectArchive.encode(
+        books: [data.books.first],
+        profile: data.profile,
+        isCollection: false,
+      ),
+    );
+    final missingImage = Archive();
+    for (final file in withImage) {
+      if (file.name.startsWith('assets/chapter-')) continue;
+      missingImage.add(ArchiveFile.bytes(file.name, file.readBytes()!));
+    }
+    expect(
+      () => ProjectArchive.decode(ZipEncoder().encodeBytes(missingImage)),
+      throwsA(isA<ProjectArchiveException>()),
+    );
+  });
+
   test('多书工程按清单识别，Android 缓存后缀不影响导入', () async {
     final data = LibraryData.seeded(profileSetupComplete: true);
     data.books.add(Book(id: 'second-book', title: '第二本书'));
@@ -286,6 +376,49 @@ void main() {
       ProjectArchive.decode(saver.bytes!, fileName: saver.name).isCollection,
       isTrue,
     );
+    controller.dispose();
+  });
+
+  test('插图后 Markdown 导出打包正文与图片，TXT 保持可读', () async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final saver = _MemorySaver();
+    final controller = AppController(
+      store: _MemoryStore(data),
+      data: data,
+      documentSaver: saver,
+      projectAssetDirectory: temporary,
+    );
+    final chapter = controller.activeChapter!;
+    final imageBytes = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+      'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+    );
+    final insertion = await controller.insertChapterImageBytes(
+      imageBytes,
+      offset: chapter.body.length,
+      alt: '插图说明',
+    );
+    expect(chapter.body, insertion.body);
+    expect(chapter.images, hasLength(1));
+    expect(await File(chapter.images.single.path).readAsBytes(), imageBytes);
+    expect(chapter.wordCount, lessThan(chapter.body.length));
+
+    expect(
+      (await controller.exportMarkdown()).status,
+      DocumentSaveStatus.saved,
+    );
+    expect(saver.name, endsWith('-Markdown.zip'));
+    final files = ZipDecoder().decodeBytes(saver.bytes!);
+    final markdown = utf8.decode(
+      files.singleWhere((file) => file.name.endsWith('.md')).readBytes()!,
+    );
+    expect(markdown, contains('![插图说明](assets/'));
+    expect(markdown, isNot(contains('yejian-image:')));
+    expect(
+      files.singleWhere((file) => file.name.startsWith('assets/')).readBytes(),
+      imageBytes,
+    );
+    expect(buildPlainText(data.books.first), contains('〔图片：插图说明〕'));
     controller.dispose();
   });
 }

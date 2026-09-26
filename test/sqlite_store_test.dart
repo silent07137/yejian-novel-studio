@@ -44,6 +44,13 @@ void main() {
                   note: '这里待改',
                 ),
               ],
+              images: [
+                ChapterImage(
+                  id: 'image-1',
+                  path: '/local/chapter-images/image-1.png',
+                  alt: '旧书馆',
+                ),
+              ],
             ),
           ],
           roles: [
@@ -106,6 +113,8 @@ void main() {
     expect(restored.books.single.chapters.single.markers.single.note, '这里待改');
     expect(restored.books.single.volumes.single.id, 'volume-1');
     expect(restored.books.single.chapters.single.body, '正文不会只存在内存里。');
+    expect(restored.books.single.chapters.single.images.single.id, 'image-1');
+    expect(restored.books.single.chapters.single.images.single.alt, '旧书馆');
     expect(restored.books.single.roles.first.name, '林照');
     expect(
       restored.books.single.roles.first.relations.single.targetRoleId,
