@@ -1,0 +1,97 @@
+name: Android AI Branch Test
+
+on:
+  push:
+    branches:
+      - feature/ai-0.4.0-dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-test-apk:
+    name: Analyze, test, and build signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/yejian-release.jks
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out AI branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Validate signing secrets
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::缺少仓库 Secret：$name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Restore release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build signed test APK
+        run: flutter build apk --release --no-pub
+
+      - name: Verify APK signature and version
+        shell: bash
+        run: |
+          apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$apksigner_path" verify --verbose build/app/outputs/flutter-apk/app-release.apk
+          aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
+          "$aapt_path" dump badging build/app/outputs/flutter-apk/app-release.apk | grep "versionName='0.4.0.ai.dev'"
+
+      - name: Prepare test artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/yejian-0.4.0.ai.dev-android-test.apk
+          (cd dist && sha256sum yejian-0.4.0.ai.dev-android-test.apk > yejian-0.4.0.ai.dev-android-test.apk.sha256)
+
+      - name: Upload signed APK without publishing a release
+        uses: actions/upload-artifact@v4
+        with:
+          name: yejian-0.4.0.ai.dev-android-test
+          path: |
+            dist/*.apk
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
