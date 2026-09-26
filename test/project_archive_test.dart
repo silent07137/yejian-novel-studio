@@ -74,8 +74,11 @@ void main() {
       isCollection: false,
     );
     final decoded = ProjectArchive.decode(bytes, fileName: 'sample.sns');
+    final cached = ProjectArchive.decode(bytes, fileName: 'sample.bin');
     final expected = data.books.first.toJson()..['coverPath'] = null;
     expect(decoded.isCollection, isFalse);
+    expect(cached.isCollection, isFalse);
+    expect(cached.books.single.id, data.books.first.id);
     expect(decoded.books.single.toJson(), expected);
     expect(decoded.covers[data.books.first.id], [1, 2, 3, 4]);
     expect(decoded.avatar, [5, 6, 7]);
@@ -90,7 +93,7 @@ void main() {
     );
   });
 
-  test('多书 .snss 保留全部作品，且与 .sns 后缀不可混用', () async {
+  test('多书工程按清单识别，Android 缓存后缀不影响导入', () async {
     final data = LibraryData.seeded(profileSetupComplete: true);
     data.books.add(Book(id: 'second-book', title: '第二本书'));
     final bytes = await ProjectArchive.encode(
@@ -101,10 +104,11 @@ void main() {
     final decoded = ProjectArchive.decode(bytes, fileName: 'books.snss');
     expect(decoded.isCollection, isTrue);
     expect(decoded.books.map((book) => book.title), ['雾灯来信', '第二本书']);
-    expect(
-      () => ProjectArchive.decode(bytes, fileName: 'books.sns'),
-      throwsA(isA<ProjectArchiveException>()),
-    );
+    for (final name in ['books.sns', 'books.bin', 'books.zip']) {
+      final reopened = ProjectArchive.decode(bytes, fileName: name);
+      expect(reopened.isCollection, isTrue);
+      expect(reopened.books.length, 2);
+    }
   });
 
   test('内容摘要不匹配时拒绝导入，旧版 JSON 仍可迁移', () async {
@@ -129,7 +133,7 @@ void main() {
     expect(
       () => ProjectArchive.decode(
         ZipEncoder().encodeBytes(altered),
-        fileName: 'broken.sns',
+        fileName: 'broken.bin',
       ),
       throwsA(isA<ProjectArchiveException>()),
     );
@@ -146,7 +150,7 @@ void main() {
         }),
       ),
     );
-    final migrated = ProjectArchive.decode(legacy, fileName: 'old.sns');
+    final migrated = ProjectArchive.decode(legacy, fileName: 'old.json');
     expect(migrated.isLegacy, isTrue);
     expect(migrated.books.single.coverPath, isNull);
     expect(

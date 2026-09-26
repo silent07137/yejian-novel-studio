@@ -120,6 +120,8 @@ class ProjectArchive {
   }
 
   static ProjectArchiveData decode(Uint8List bytes, {String? fileName}) {
+    // Kept for callers that report the chosen document's name. Android may
+    // supply a MIME-derived cache name, so neither it nor its suffix is trusted.
     if (bytes.length > maxArchiveBytes) {
       throw const ProjectArchiveException('工程文件超过 128 MB，拒绝导入');
     }
@@ -127,7 +129,7 @@ class ProjectArchive {
       throw const ProjectArchiveException('工程文件为空');
     }
     if (bytes.first == 0x7b) {
-      return _decodeLegacy(bytes, fileName: fileName);
+      return _decodeLegacy(bytes);
     }
     try {
       // Inspect declared sizes before asking the decoder to expand content.
@@ -169,7 +171,6 @@ class ProjectArchive {
         throw const ProjectArchiveException('工程类型无效');
       }
       final isCollection = kind == 'collection';
-      _checkExtension(fileName, isCollection);
       final contentBytes = _entry(files, 'content.json', maxContentBytes);
       if (_hash(contentBytes) != manifest['contentSha256']) {
         throw const ProjectArchiveException('工程内容校验失败');
@@ -240,7 +241,7 @@ class ProjectArchive {
     }
   }
 
-  static ProjectArchiveData _decodeLegacy(Uint8List bytes, {String? fileName}) {
+  static ProjectArchiveData _decodeLegacy(Uint8List bytes) {
     try {
       final payload = _jsonMap(bytes, '旧版工程');
       final formatName = payload['format'];
@@ -249,7 +250,6 @@ class ProjectArchive {
           payload['formatVersion'] != 1) {
         throw const ProjectArchiveException('旧版工程格式不受支持');
       }
-      _checkExtension(fileName, isCollection);
       final library = payload['library'];
       final books = isCollection
           ? _booksFromContent(
@@ -349,14 +349,6 @@ class ProjectArchive {
       throw ProjectArchiveException('$label格式无效');
     }
     return value;
-  }
-
-  static void _checkExtension(String? fileName, bool isCollection) {
-    if (fileName == null) return;
-    final expected = isCollection ? '.snss' : '.sns';
-    if (!fileName.toLowerCase().endsWith(expected)) {
-      throw ProjectArchiveException('文件后缀与工程类型不符，应为 $expected');
-    }
   }
 
   static String _hash(List<int> bytes) => sha256.convert(bytes).toString();

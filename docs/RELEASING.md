@@ -55,13 +55,13 @@ Secrets 只会在 Beta 工作流的签名步骤中注入，不会写入仓库。
 
 如果发布步骤提示 403，请确认仓库允许工作流使用读写权限。工作流本身只申请 `contents: write`，用于创建标签、Release 和上传 APK。
 
-## 5. 发布 dev.17 预发布版
+## 5. 发布当前预发布版
 
 1. 确认 `main` 分支已经包含准备发布的代码。
 2. 打开仓库的 `Actions` 页面。
 3. 在左侧选择 `Android Beta`。
 4. 点击 `Run workflow`。
-5. 选择 `main`，标签填写 `v0.4.0-dev.17`（必须与 `pubspec.yaml` 中 `+` 前的版本完全一致）。
+5. 选择 `main`，标签填写 `v0.4.0-dev.20`（必须与 `pubspec.yaml` 中 `+` 前的版本完全一致）。
 6. 再次点击 `Run workflow`。
 7. 等待 Analyze、Test、Build 和 Publish 全部通过。
 8. 在仓库 `Releases` 页面下载 APK，并核对附带的 `.sha256` 文件。
@@ -73,13 +73,13 @@ Secrets 只会在 Beta 工作流的签名步骤中注入，不会写入仓库。
 每次需要让 Android 将新包识别为可升级版本，都必须提高 `pubspec.yaml` 中 `+` 后面的 `versionCode`。例如：
 
 ```yaml
-version: 0.4.0-dev.17+19
+version: 0.4.0-dev.20+22
 ```
 
 然后提交并推送代码，再运行工作流，使用新标签：
 
 ```text
-v0.4.0-dev.17
+v0.4.0-dev.20
 ```
 
 同时更新应用“关于应用”的版本显示与版本历史，并在 `docs/releases/<标签>.md` 写中文更新内容。工作流会把该文件直接用于预发布页面；缺少说明时停止发布。每个预发布版本使用独立的 `dev.N`，不再给同一个版本追加 `-beta.N`。旧的 `dev.11-beta.N` 标签保留为历史记录。同一个标签不能重复发布；工作流遇到已存在的标签或 Release 会停止，不会覆盖旧包。

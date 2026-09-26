@@ -4055,7 +4055,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.19 (21)';
+  static const _version = '0.4.0-dev.20 (22)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4082,6 +4082,8 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.20\n'
+            '· 修复 Android 工程导入误判文件后缀，单书与多书均可正常导入\n\n'
             '0.4.0-dev.19\n'
             '· 新增单书 .sns 与多书 .snss 工程导入导出\n'
             '· 工程文件包含图片并可校验；导入前预览，已有作品需确认替换\n\n'
