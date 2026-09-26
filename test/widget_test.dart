@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yejian_native/ai/ai_service.dart';
 import 'package:yejian_native/data/local_store.dart';
 import 'package:yejian_native/main.dart';
 import 'package:yejian_native/models/library_data.dart';
@@ -21,6 +22,41 @@ class MemoryStore implements DataStore {
   @override
   Future<void> save(LibraryData data) async {
     this.data = data;
+  }
+}
+
+class MemoryAiSettingsStore implements AiSettingsStore {
+  MemoryAiSettingsStore(this.value);
+
+  AiConfiguration value;
+
+  @override
+  Future<AiConfiguration> load() async => value;
+
+  @override
+  Future<void> save(AiConfiguration value) async => this.value = value;
+}
+
+class FakeAiTransport implements AiTransport {
+  int calls = 0;
+  String? sentText;
+
+  @override
+  Future<Map<String, dynamic>> post(
+    Uri uri, {
+    required String apiKey,
+    required Map<String, dynamic> body,
+  }) async {
+    calls++;
+    sentText = ((body['messages'] as List).last as Map)['content'] as String;
+    return {
+      'choices': [
+        {
+          'finish_reason': 'stop',
+          'message': {'content': '润色后的句子'},
+        },
+      ],
+    };
   }
 }
 
@@ -203,14 +239,18 @@ void main() {
     final temporary = Directory.systemTemp.createTempSync('yejian-preview-');
     addTearDown(() => temporary.delete(recursive: true));
     final image = File('${temporary.path}${Platform.pathSeparator}scene.png');
-    image.writeAsBytesSync(base64Decode(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
-      'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
-    ));
+    image.writeAsBytesSync(
+      base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+        'AAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==',
+      ),
+    );
     final data = LibraryData.seeded(profileSetupComplete: true);
     final chapter = data.books.first.chapters.first;
     chapter.body = '上文\n\n![场景](yejian-image:image-1)\n\n下文';
-    chapter.images.add(ChapterImage(id: 'image-1', path: image.path, alt: '场景'));
+    chapter.images.add(
+      ChapterImage(id: 'image-1', path: image.path, alt: '场景'),
+    );
     final controller = AppController(store: MemoryStore(data), data: data);
     controller.openBook(data.books.first.id);
     controller.navigateBook(WorkspacePage.writing);
@@ -1130,7 +1170,9 @@ void main() {
       multiLine: true,
     ).firstMatch(pubspec)!;
     expect(
-      find.text('${version.group(1)} (${version.group(2)})'),
+      find.text(
+        '${version.group(1)!.replaceFirst('-ai.dev', '.ai.dev')} (${version.group(2)})',
+      ),
       findsOneWidget,
     );
     expect(find.text('GPL-2.0-only'), findsOneWidget);
@@ -1252,5 +1294,112 @@ void main() {
       greaterThan(80),
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI 设置仅保存到独立配置存储', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final aiSettings = MemoryAiSettingsStore(const AiConfiguration());
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: aiSettings,
+    )..navigate(WorkspacePage.appSettings);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final entry = find.byKey(const ValueKey('open-ai-settings'));
+    await tester.drag(
+      find.byType(SingleChildScrollView).last,
+      const Offset(0, -260),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-model')),
+      'test-model',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-api-key')),
+      'private-key',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-settings')));
+    await tester.pumpAndSettle();
+
+    expect(aiSettings.value.model, 'test-model');
+    expect(aiSettings.value.apiKey, 'private-key');
+    expect(data.toJson().toString(), isNot(contains('private-key')));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI 润色取消不发送，确认后预览再替换选区', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final aiSettings = MemoryAiSettingsStore(
+      const AiConfiguration(
+        baseUrl: 'https://example.com/v1',
+        model: 'test-model',
+        apiKey: 'private-key',
+      ),
+    );
+    final transport = FakeAiTransport();
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: aiSettings,
+      aiTextService: AiTextService(transport: transport),
+    );
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = tester
+        .widget<TextField>(find.byType(TextField).last)
+        .controller!;
+    final original = body.text;
+    body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    final editor = find.byType(EditableText).last;
+    final field = tester.widget<TextField>(find.byType(TextField).last);
+    final toolbar = field.contextMenuBuilder!(
+      tester.element(editor),
+      tester.state<EditableTextState>(editor),
+    ) as AdaptiveTextSelectionToolbar;
+    final polish = toolbar.buttonItems!.singleWhere(
+      (item) => item.label == 'AI 润色',
+    );
+    polish.onPressed!();
+    await tester.pumpAndSettle();
+    expect(find.textContaining('发送所选文字以润色'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(transport.calls, 0);
+    expect(body.text, original);
+
+    body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    polish.onPressed!();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认发送'));
+    await tester.pumpAndSettle();
+    expect(transport.calls, 1);
+    expect(transport.sentText, original.substring(0, 4));
+    expect(find.text('AI 润色预览'), findsOneWidget);
+    expect(body.text, original);
+    await tester.tap(find.byKey(const ValueKey('apply-ai-result')));
+    await tester.pumpAndSettle();
+    expect(body.text, startsWith('润色后的句子'));
+    expect(field.undoController!.value.canUndo, isTrue);
+    field.undoController!.undo();
+    await tester.pumpAndSettle();
+    expect(body.text, original);
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(milliseconds: 900));
   });
 }

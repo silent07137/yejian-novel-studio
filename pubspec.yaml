@@ -16,7 +16,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.4.0-dev.21+23
+# The UI displays 0.4.0.ai.dev; pubspec requires a SemVer prerelease separator.
+version: 0.4.0-ai.dev+24
 
 environment:
   sdk: ^3.13.4
@@ -36,6 +37,7 @@ dependencies:
   crypto: ^3.0.7
   file_selector: ^1.0.4
   flutter_markdown_plus: ^1.0.12
+  flutter_secure_storage: ^10.0.0
   path_provider: ^2.1.5
   sqflite: ^2.4.2
   sqflite_common_ffi: ^2.4.0+2
