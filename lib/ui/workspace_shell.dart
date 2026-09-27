@@ -2178,7 +2178,7 @@ class _EditorPaneState extends State<_EditorPane> {
         builder: (context) => AlertDialog(
           title: Text('发送所选文字以$label？'),
           content: Text(
-            '将所选的 ${selectedText.length} 个字符发送至 ${endpoint.host}。'
+            '将所选的 ${selectedText.length} 个字符及当前提示词发送至 ${endpoint.host}。'
             '不会发送未选中的章节内容；服务商可能收取费用。',
           ),
           actions: [
@@ -4476,6 +4476,19 @@ class ApplicationSettingsPage extends StatelessWidget {
                   showAiSettingsDialog(context, controller.aiSettingsStore),
             ),
           ),
+          Card(
+            child: ListTile(
+              key: const ValueKey('open-ai-prompts'),
+              leading: const Icon(Icons.edit_note_rounded),
+              title: const Text('编辑 AI 提示词'),
+              subtitle: const Text('润色、续写；默认使用内置提示词'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => showAiPromptSettingsDialog(
+                context,
+                controller.aiSettingsStore,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -4487,7 +4500,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai.dev (24)';
+  static const _version = '0.4.0.ai.dev (25)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4579,7 +4592,7 @@ class AboutPage extends StatelessWidget {
       builder: (context) => AlertDialog(
         title: const Text('数据与隐私'),
         content: const Text(
-          '页间采用本地优先设计。作品、章节、角色、世界观与情节数据保存在设备本地。只有在你主动导出、分享文件，或确认使用 AI 功能时，相应数据才会离开应用。AI 功能仅发送你所选的文字到你配置的服务商；API Key 保存在设备安全存储，不包含在工程文件中。',
+          '页间采用本地优先设计。作品、章节、角色、世界观与情节数据保存在设备本地。只有在你主动导出、分享文件，或确认使用 AI 功能时，相应数据才会离开应用。AI 功能会将你所选的文字及当前提示词发送到你配置的服务商；API Key 保存在设备安全存储，不包含在工程文件中。',
         ),
         actions: [
           TextButton(

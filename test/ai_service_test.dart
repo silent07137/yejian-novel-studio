@@ -52,6 +52,38 @@ void main() {
     expect(transport.body?['model'], 'test-model');
     final messages = transport.body?['messages'] as List;
     expect((messages.last as Map)['content'], '只发送这句');
+    expect(
+      (messages.first as Map)['content'],
+      defaultAiPrompt(AiTextAction.polish),
+    );
+  });
+
+  test('自定义提示词只覆盖对应操作，空白回退内置提示词', () async {
+    final transport = _FakeTransport();
+    final service = AiTextService(transport: transport);
+    final custom = configuration.copyWith(
+      polishPrompt: '请用简洁文风润色，只输出正文。',
+      continueWritingPrompt: '  ',
+    );
+    await service.generate(
+      configuration: custom,
+      action: AiTextAction.polish,
+      selectedText: '原句',
+    );
+    var messages = transport.body?['messages'] as List;
+    expect((messages.first as Map)['content'], '请用简洁文风润色，只输出正文。');
+    expect((messages.last as Map)['content'], '原句');
+
+    await service.generate(
+      configuration: custom,
+      action: AiTextAction.continueWriting,
+      selectedText: '原句',
+    );
+    messages = transport.body?['messages'] as List;
+    expect(
+      (messages.first as Map)['content'],
+      defaultAiPrompt(AiTextAction.continueWriting),
+    );
   });
 
   test('拒绝非 HTTPS 地址、图片标记与不完整配置', () async {

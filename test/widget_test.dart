@@ -1302,7 +1302,9 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final data = LibraryData.seeded(profileSetupComplete: true);
-    final aiSettings = MemoryAiSettingsStore(const AiConfiguration());
+    final aiSettings = MemoryAiSettingsStore(
+      const AiConfiguration(polishPrompt: '保留的润色提示词'),
+    );
     final controller = AppController(
       store: MemoryStore(data),
       data: data,
@@ -1332,7 +1334,63 @@ void main() {
 
     expect(aiSettings.value.model, 'test-model');
     expect(aiSettings.value.apiKey, 'private-key');
+    expect(aiSettings.value.polishPrompt, '保留的润色提示词');
     expect(data.toJson().toString(), isNot(contains('private-key')));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI 提示词可自定义、恢复默认且不进入作品数据', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final aiSettings = MemoryAiSettingsStore(
+      const AiConfiguration(model: 'test-model', apiKey: 'private-key'),
+    );
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: aiSettings,
+    )..navigate(WorkspacePage.appSettings);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final entry = find.byKey(const ValueKey('open-ai-prompts'));
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('ai-polish-prompt')))
+          .controller!
+          .text,
+      defaultAiPrompt(AiTextAction.polish),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-polish-prompt')),
+      '按我的文风润色，不要解释。',
+    );
+    await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
+    await tester.tap(find.byKey(const ValueKey('save-ai-prompts')));
+    await tester.pumpAndSettle();
+    expect(aiSettings.value.polishPrompt, '按我的文风润色，不要解释。');
+    expect(aiSettings.value.model, 'test-model');
+    expect(aiSettings.value.apiKey, 'private-key');
+    expect(data.toJson().toString(), isNot(contains('按我的文风润色')));
+
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reset-ai-polish-prompt')));
+    await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
+    await tester.tap(find.byKey(const ValueKey('save-ai-prompts')));
+    await tester.pumpAndSettle();
+    expect(aiSettings.value.polishPrompt, isEmpty);
+    expect(
+      aiSettings.value.promptFor(AiTextAction.polish),
+      defaultAiPrompt(AiTextAction.polish),
+    );
     expect(tester.takeException(), isNull);
   });
 

@@ -6,16 +6,51 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 enum AiTextAction { polish, continueWriting }
 
+String defaultAiPrompt(AiTextAction action) => switch (action) {
+  AiTextAction.polish =>
+    '你是中文小说编辑。润色所选文字，保留原有剧情事实、人物称呼、叙事视角和 Markdown 标记。只输出润色后的正文，不要解释。',
+  AiTextAction.continueWriting =>
+    '你是中文小说写作助手。根据所选文字续写一小段，保持原有叙事视角与文风。只输出新写的正文，不要重复原文或解释。',
+};
+
 class AiConfiguration {
   const AiConfiguration({
     this.baseUrl = 'https://api.openai.com/v1',
     this.model = '',
     this.apiKey = '',
+    this.polishPrompt = '',
+    this.continueWritingPrompt = '',
   });
 
   final String baseUrl;
   final String model;
   final String apiKey;
+
+  /// Empty means the built-in prompt, so future default improvements still apply.
+  final String polishPrompt;
+  final String continueWritingPrompt;
+
+  String promptFor(AiTextAction action) {
+    final custom = switch (action) {
+      AiTextAction.polish => polishPrompt,
+      AiTextAction.continueWriting => continueWritingPrompt,
+    };
+    return custom.trim().isEmpty ? defaultAiPrompt(action) : custom.trim();
+  }
+
+  AiConfiguration copyWith({
+    String? baseUrl,
+    String? model,
+    String? apiKey,
+    String? polishPrompt,
+    String? continueWritingPrompt,
+  }) => AiConfiguration(
+    baseUrl: baseUrl ?? this.baseUrl,
+    model: model ?? this.model,
+    apiKey: apiKey ?? this.apiKey,
+    polishPrompt: polishPrompt ?? this.polishPrompt,
+    continueWritingPrompt: continueWritingPrompt ?? this.continueWritingPrompt,
+  );
 
   bool get isComplete =>
       baseUrl.trim().isNotEmpty &&
@@ -38,6 +73,8 @@ class SecureAiSettingsStore implements AiSettingsStore {
   static const _baseUrlKey = 'ai.base_url';
   static const _modelKey = 'ai.model';
   static const _apiKeyKey = 'ai.api_key';
+  static const _polishPromptKey = 'ai.prompt.polish';
+  static const _continueWritingPromptKey = 'ai.prompt.continue_writing';
 
   @override
   Future<AiConfiguration> load() async => AiConfiguration(
@@ -45,6 +82,9 @@ class SecureAiSettingsStore implements AiSettingsStore {
         await _storage.read(key: _baseUrlKey) ?? 'https://api.openai.com/v1',
     model: await _storage.read(key: _modelKey) ?? '',
     apiKey: await _storage.read(key: _apiKeyKey) ?? '',
+    polishPrompt: await _storage.read(key: _polishPromptKey) ?? '',
+    continueWritingPrompt:
+        await _storage.read(key: _continueWritingPromptKey) ?? '',
   );
 
   @override
@@ -52,6 +92,14 @@ class SecureAiSettingsStore implements AiSettingsStore {
     await _storage.write(key: _baseUrlKey, value: value.baseUrl.trim());
     await _storage.write(key: _modelKey, value: value.model.trim());
     await _storage.write(key: _apiKeyKey, value: value.apiKey.trim());
+    await _storage.write(
+      key: _polishPromptKey,
+      value: value.polishPrompt.trim(),
+    );
+    await _storage.write(
+      key: _continueWritingPromptKey,
+      value: value.continueWritingPrompt.trim(),
+    );
   }
 }
 
@@ -166,12 +214,7 @@ class AiTextService {
     if (selectedText.contains('yejian-image:')) {
       throw const AiRequestException('选区包含图片标记，请只选择正文文字');
     }
-    final instruction = switch (action) {
-      AiTextAction.polish =>
-        '你是中文小说编辑。润色所选文字，保留原有剧情事实、人物称呼、叙事视角和 Markdown 标记。只输出润色后的正文，不要解释。',
-      AiTextAction.continueWriting =>
-        '你是中文小说写作助手。根据所选文字续写一小段，保持原有叙事视角与文风。只输出新写的正文，不要重复原文或解释。',
-    };
+    final instruction = configuration.promptFor(action);
     final result = await _transport.post(
       endpointFor(configuration.baseUrl),
       apiKey: configuration.apiKey.trim(),
