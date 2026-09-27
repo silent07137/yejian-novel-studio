@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yejian_native/ai/ai_service.dart';
+import 'package:yejian_native/ai/ai_history.dart';
 import 'package:yejian_native/data/local_store.dart';
 import 'package:yejian_native/main.dart';
 import 'package:yejian_native/models/library_data.dart';
@@ -41,21 +42,66 @@ class MemoryAiSettingsStore implements AiSettingsStore {
         activeId: 'initial',
       );
     }
+    if ([
+      value.polishPrompt,
+      value.continueWritingPrompt,
+      value.rewritePrompt,
+      value.customPrompt,
+    ].any((prompt) => prompt.isNotEmpty)) {
+      promptCatalog = AiPromptCatalog(
+        customTemplates: [
+          AiPromptTemplate(
+            id: 'legacy-prompt',
+            name: '原有提示词',
+            polishPrompt: value.polishPrompt,
+            continueWritingPrompt: value.continueWritingPrompt,
+            rewritePrompt: value.rewritePrompt,
+            customPrompt: value.customPrompt,
+          ),
+        ],
+        defaultTemplateId: 'legacy-prompt',
+      );
+    }
   }
 
   AiConfiguration value;
   AiProviderCatalog catalog = const AiProviderCatalog();
+  AiPromptCatalog promptCatalog = const AiPromptCatalog();
 
   @override
   Future<AiConfiguration> load() async => value;
 
   @override
   Future<void> save(AiConfiguration value) async {
-    this.value = this.value.copyWith(
-      polishPrompt: value.polishPrompt,
-      continueWritingPrompt: value.continueWritingPrompt,
-      rewritePrompt: value.rewritePrompt,
-      customPrompt: value.customPrompt,
+    final current = promptCatalog.defaultTemplate;
+    final id = current.isBuiltin ? 'custom-default' : current.id;
+    await savePromptCatalog(
+      AiPromptCatalog(
+        customTemplates: [
+          for (final template in promptCatalog.customTemplates)
+            if (template.id == id)
+              AiPromptTemplate(
+                id: id,
+                name: current.name,
+                polishPrompt: value.polishPrompt,
+                continueWritingPrompt: value.continueWritingPrompt,
+                rewritePrompt: value.rewritePrompt,
+                customPrompt: value.customPrompt,
+              )
+            else
+              template,
+          if (current.isBuiltin)
+            AiPromptTemplate(
+              id: id,
+              name: '自定义提示词',
+              polishPrompt: value.polishPrompt,
+              continueWritingPrompt: value.continueWritingPrompt,
+              rewritePrompt: value.rewritePrompt,
+              customPrompt: value.customPrompt,
+            ),
+        ],
+        defaultTemplateId: id,
+      ),
     );
   }
 
@@ -72,11 +118,37 @@ class MemoryAiSettingsStore implements AiSettingsStore {
       apiKey: active?.apiKey ?? '',
     );
   }
+
+  @override
+  Future<AiPromptCatalog> loadPromptCatalog() async => promptCatalog;
+
+  @override
+  Future<void> savePromptCatalog(AiPromptCatalog catalog) async {
+    promptCatalog = catalog;
+    final template = catalog.defaultTemplate;
+    value = value.copyWith(
+      polishPrompt: template.isBuiltin && template.id == 'builtin-default'
+          ? ''
+          : template.promptFor(AiTextAction.polish),
+      continueWritingPrompt:
+          template.isBuiltin && template.id == 'builtin-default'
+          ? ''
+          : template.promptFor(AiTextAction.continueWriting),
+      rewritePrompt: template.isBuiltin && template.id == 'builtin-default'
+          ? ''
+          : template.promptFor(AiTextAction.rewrite),
+      customPrompt: template.isBuiltin && template.id == 'builtin-default'
+          ? ''
+          : template.promptFor(AiTextAction.custom),
+    );
+  }
 }
 
 class FakeAiTransport implements AiTransport {
   int calls = 0;
   String? sentText;
+  String? sentModel;
+  String? sentPrompt;
 
   @override
   Future<Map<String, dynamic>> post(
@@ -86,6 +158,9 @@ class FakeAiTransport implements AiTransport {
   }) async {
     calls++;
     sentText = ((body['messages'] as List).last as Map)['content'] as String;
+    sentModel = body['model'] as String?;
+    sentPrompt =
+        ((body['messages'] as List).first as Map)['content'] as String?;
     return {
       'choices': [
         {
@@ -94,6 +169,18 @@ class FakeAiTransport implements AiTransport {
         },
       ],
     };
+  }
+}
+
+class MemoryAiHistoryStore extends AiHistoryStore {
+  AiGenerationHistory value = const AiGenerationHistory();
+
+  @override
+  Future<AiGenerationHistory> load() async => value;
+
+  @override
+  Future<void> save(AiGenerationHistory value) async {
+    this.value = value;
   }
 }
 
@@ -1348,6 +1435,7 @@ void main() {
       store: MemoryStore(data),
       data: data,
       aiSettingsStore: aiSettings,
+      aiHistoryStore: MemoryAiHistoryStore(),
     )..navigate(WorkspacePage.appSettings);
     await tester.pumpWidget(YejianApp(controller: controller));
     await tester.pumpAndSettle();
@@ -1387,7 +1475,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('AI 提示词可自定义、恢复默认且不进入作品数据', (tester) async {
+  testWidgets('AI 文风模板可自定义，内置模板可编辑与删除', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1400,6 +1488,7 @@ void main() {
       store: MemoryStore(data),
       data: data,
       aiSettingsStore: aiSettings,
+      aiHistoryStore: MemoryAiHistoryStore(),
     )..navigate(WorkspacePage.appSettings);
     await tester.pumpWidget(YejianApp(controller: controller));
     await tester.pumpAndSettle();
@@ -1408,46 +1497,117 @@ void main() {
     await tester.ensureVisible(entry);
     await tester.tap(entry);
     await tester.pumpAndSettle();
-    final prompts = find.byKey(const ValueKey('open-ai-prompts'));
-    await tester.tap(prompts);
+    final addTemplate = find.byKey(const ValueKey('add-ai-template'));
+    await tester.ensureVisible(addTemplate);
+    await tester.tap(addTemplate);
     await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-template-name')),
+      '冷静叙事',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-template-style')),
+      '保持冷静，减少形容。',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-template')));
+    await tester.pumpAndSettle();
+    expect(aiSettings.promptCatalog.customTemplates.single.name, '冷静叙事');
     expect(
-      tester
-          .widget<TextField>(find.byKey(const ValueKey('ai-polish-prompt')))
-          .controller!
-          .text,
-      defaultAiPrompt(AiTextAction.polish),
+      aiSettings.promptCatalog.defaultTemplate.promptFor(AiTextAction.polish),
+      contains('保持冷静，减少形容。'),
     );
-    await tester.enterText(
-      find.byKey(const ValueKey('ai-polish-prompt')),
-      '按我的文风润色，不要解释。',
-    );
-    await tester.ensureVisible(find.byKey(const ValueKey('ai-rewrite-prompt')));
-    await tester.enterText(
-      find.byKey(const ValueKey('ai-rewrite-prompt')),
-      '改写时保留视角。',
-    );
-    await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
-    await tester.tap(find.byKey(const ValueKey('save-ai-prompts')));
-    await tester.pumpAndSettle();
-    expect(aiSettings.value.polishPrompt, '按我的文风润色，不要解释。');
-    expect(aiSettings.value.rewritePrompt, '改写时保留视角。');
     expect(aiSettings.value.model, 'test-model');
     expect(aiSettings.value.apiKey, 'private-key');
-    expect(data.toJson().toString(), isNot(contains('按我的文风润色')));
+    expect(data.toJson().toString(), isNot(contains('保持冷静')));
 
-    await tester.ensureVisible(prompts);
-    await tester.tap(prompts);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reset-ai-polish-prompt')));
-    await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
-    await tester.tap(find.byKey(const ValueKey('save-ai-prompts')));
-    await tester.pumpAndSettle();
-    expect(aiSettings.value.polishPrompt, isEmpty);
-    expect(
-      aiSettings.value.promptFor(AiTextAction.polish),
-      defaultAiPrompt(AiTextAction.polish),
+    final builtin = find.byKey(const ValueKey('ai-template-builtin-delicate'));
+    await tester.ensureVisible(builtin);
+    await tester.tap(
+      find.descendant(
+        of: builtin,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-template-style')),
+      '编辑后的内置文风',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-template')));
+    await tester.pumpAndSettle();
+    expect(
+      aiSettings.promptCatalog.builtinOverrides.single.styleInstruction,
+      '编辑后的内置文风',
+    );
+
+    await tester.ensureVisible(builtin);
+    await tester.tap(
+      find.descendant(
+        of: builtin,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(
+      aiSettings.promptCatalog.hiddenBuiltinIds,
+      contains('builtin-delicate'),
+    );
+    expect(
+      aiSettings.promptCatalog.templates.map((item) => item.id),
+      isNot(contains('builtin-delicate')),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI 设置显示累计次数、历史结果与保留条数', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final history = MemoryAiHistoryStore();
+    await history.append(
+      AiGenerationRecord(
+        id: 'one',
+        createdAt: DateTime.utc(2026, 9, 27),
+        bookTitle: '测试书',
+        chapterTitle: '第一章',
+        action: AiTextAction.polish,
+        providerName: '主服务',
+        model: 'test-model',
+        templateName: '默认',
+        result: '这是一条生成结果',
+      ),
+    );
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: MemoryAiSettingsStore(const AiConfiguration()),
+      aiHistoryStore: history,
+    )..navigate(WorkspacePage.aiSettings);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    final retention = find.byKey(const ValueKey('ai-history-retention'));
+    await tester.ensureVisible(retention);
+    expect(find.text('累计生成次数'), findsOneWidget);
+    expect(find.text('1 次'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('ai-history-one')));
+    await tester.pumpAndSettle();
+    expect(find.text('这是一条生成结果'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    await tester.tap(retention);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('20 条').last);
+    await tester.pumpAndSettle();
+    expect(history.value.retentionLimit, 20);
+    expect(history.value.totalCount, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -1469,6 +1629,7 @@ void main() {
       store: MemoryStore(data),
       data: data,
       aiSettingsStore: aiSettings,
+      aiHistoryStore: MemoryAiHistoryStore(),
     )..navigate(WorkspacePage.aiSettings);
     await tester.pumpWidget(YejianApp(controller: controller));
     await tester.pumpAndSettle();
@@ -1537,10 +1698,12 @@ void main() {
       ),
     );
     final transport = FakeAiTransport();
+    final historyStore = MemoryAiHistoryStore();
     final controller = AppController(
       store: MemoryStore(data),
       data: data,
       aiSettingsStore: aiSettings,
+      aiHistoryStore: historyStore,
       aiTextService: AiTextService(transport: transport),
     );
     controller.openBook(data.books.first.id);
@@ -1571,6 +1734,7 @@ void main() {
     await tester.tap(find.text('取消').last);
     await tester.pumpAndSettle();
     expect(transport.calls, 0);
+    expect(historyStore.value.totalCount, 0);
     expect(body.text, original);
 
     body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
@@ -1582,6 +1746,8 @@ void main() {
     expect(transport.sentText, contains('【作品参考资料】'));
     expect(transport.sentText, contains(original.substring(0, 4)));
     expect(find.text('AI 结果'), findsOneWidget);
+    expect(historyStore.value.totalCount, 1);
+    expect(historyStore.value.records.single.result, '润色后的句子');
     expect(body.text, original);
     await tester.tap(find.byKey(const ValueKey('apply-ai-result')));
     await tester.pumpAndSettle();
@@ -1592,6 +1758,67 @@ void main() {
     expect(body.text, original);
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('正文 AI 请求可单次切换模型与文风，结果记入历史', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final settings = MemoryAiSettingsStore(
+      const AiConfiguration(model: 'first-model', apiKey: 'first-key'),
+    );
+    await settings.saveProviders(
+      AiProviderCatalog(
+        profiles: [
+          ...settings.catalog.profiles,
+          const AiProviderProfile(
+            id: 'second',
+            name: '备用服务',
+            baseUrl: 'https://second.example/v1',
+            model: 'second-model',
+            apiKey: 'second-key',
+          ),
+        ],
+        activeId: 'initial',
+      ),
+    );
+    final history = MemoryAiHistoryStore();
+    final transport = FakeAiTransport();
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: settings,
+      aiHistoryStore: history,
+      aiTextService: AiTextService(transport: transport),
+    );
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ai-editor-menu')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('ai-model-select')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('备用服务 · second-model').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ai-template-select')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('简洁克制').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ai-send')));
+    await tester.pumpAndSettle();
+
+    expect(transport.sentModel, 'second-model');
+    expect(transport.sentPrompt, contains('句子凝练'));
+    expect(history.value.totalCount, 1);
+    expect(history.value.records.single.model, 'second-model');
+    expect(history.value.records.single.templateName, '简洁克制');
+    expect(settings.catalog.activeId, 'initial');
+    expect(settings.promptCatalog.defaultTemplateId, 'builtin-default');
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('AI 自定义指令可关闭作品上下文，放弃结果不修改正文', (tester) async {
@@ -1607,6 +1834,7 @@ void main() {
       aiSettingsStore: MemoryAiSettingsStore(
         const AiConfiguration(model: 'test-model', apiKey: 'private-key'),
       ),
+      aiHistoryStore: MemoryAiHistoryStore(),
       aiTextService: AiTextService(transport: transport),
     );
     controller.openBook(data.books.first.id);
@@ -1627,11 +1855,20 @@ void main() {
       '改成第一人称',
     );
     await tester.pumpAndSettle();
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
     expect(find.text('AI 操作失败，请检查服务配置'), findsNothing);
-    expect(find.text('附带本书相关资料'), findsOneWidget);
-    await tester.ensureVisible(
+    await tester.scrollUntilVisible(
       find.byKey(const ValueKey('ai-include-context')),
+      220,
+      scrollable: find
+          .descendant(
+            of: find.byKey(const ValueKey('ai-editor-content')),
+            matching: find.byType(Scrollable),
+          )
+          .first,
     );
+    expect(find.text('附带本书相关资料'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('ai-include-context')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认发送'));
@@ -1659,6 +1896,7 @@ void main() {
       aiSettingsStore: MemoryAiSettingsStore(
         const AiConfiguration(model: 'test-model', apiKey: 'private-key'),
       ),
+      aiHistoryStore: MemoryAiHistoryStore(),
       aiTextService: AiTextService(transport: transport),
     );
     controller.openBook(data.books.first.id);

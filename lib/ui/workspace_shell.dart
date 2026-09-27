@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
 import '../ai/ai_service.dart';
+import '../ai/ai_history.dart';
 import '../domain/project_archive.dart';
 import '../models/library_data.dart';
 import '../platform/document_saver.dart';
@@ -4393,6 +4394,8 @@ class AiSettingsPage extends StatefulWidget {
 
 class _AiSettingsPageState extends State<AiSettingsPage> {
   AiProviderCatalog? _catalog;
+  AiPromptCatalog? _promptCatalog;
+  AiGenerationHistory? _history;
   String? _error;
 
   @override
@@ -4404,10 +4407,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   Future<void> _reload() async {
     try {
       final catalog = await widget.controller.aiSettingsStore.loadProviders();
+      final prompts = await widget.controller.aiSettingsStore
+          .loadPromptCatalog();
+      AiGenerationHistory? history;
+      String? historyError;
+      try {
+        history = await widget.controller.aiHistoryStore.load();
+      } on Object {
+        historyError = '无法读取生成历史，请检查本地记录文件';
+      }
       if (mounted) {
         setState(() {
           _catalog = catalog;
-          _error = null;
+          _promptCatalog = prompts;
+          _history = history;
+          _error = historyError;
         });
       }
     } on Object {
@@ -4474,6 +4488,155 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     } on Object {
       if (mounted) setState(() => _error = '删除 API 配置失败');
     }
+  }
+
+  Future<void> _editTemplate(AiPromptTemplate? template) async {
+    await showAiPromptTemplateDialog(
+      context,
+      widget.controller.aiSettingsStore,
+      template: template,
+    );
+    if (mounted) await _reload();
+  }
+
+  Future<void> _selectTemplate(AiPromptTemplate template) async {
+    final catalog = _promptCatalog;
+    if (catalog == null || catalog.defaultTemplateId == template.id) return;
+    try {
+      await widget.controller.aiSettingsStore.savePromptCatalog(
+        AiPromptCatalog(
+          customTemplates: catalog.customTemplates,
+          builtinOverrides: catalog.builtinOverrides,
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultTemplateId: template.id,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '切换文风模板失败');
+    }
+  }
+
+  Future<void> _deleteTemplate(AiPromptTemplate template) async {
+    final catalog = _promptCatalog;
+    if (catalog == null) return;
+    if (catalog.templates.length <= 1) {
+      setState(() => _error = '至少保留一个文风模板');
+      return;
+    }
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除文风模板'),
+        content: Text('确定删除「${template.name}」吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    final remainingCustom = catalog.customTemplates
+        .where((item) => item.id != template.id)
+        .toList();
+    final hidden = [
+      ...catalog.hiddenBuiltinIds,
+      if (template.isBuiltin) template.id,
+    ];
+    final remaining = AiPromptCatalog(
+      customTemplates: remainingCustom,
+      builtinOverrides: catalog.builtinOverrides,
+      hiddenBuiltinIds: hidden,
+      defaultTemplateId: catalog.defaultTemplateId,
+    ).templates;
+    try {
+      await widget.controller.aiSettingsStore.savePromptCatalog(
+        AiPromptCatalog(
+          customTemplates: remainingCustom,
+          builtinOverrides: catalog.builtinOverrides,
+          hiddenBuiltinIds: hidden,
+          defaultTemplateId: catalog.defaultTemplateId == template.id
+              ? remaining.first.id
+              : catalog.defaultTemplateId,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '删除文风模板失败');
+    }
+  }
+
+  Future<void> _resetBuiltin(AiPromptTemplate template) async {
+    final catalog = _promptCatalog;
+    if (catalog == null) return;
+    try {
+      await widget.controller.aiSettingsStore.savePromptCatalog(
+        AiPromptCatalog(
+          customTemplates: catalog.customTemplates,
+          builtinOverrides: catalog.builtinOverrides
+              .where((item) => item.id != template.id)
+              .toList(),
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultTemplateId: catalog.defaultTemplateId,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '恢复内置模板失败');
+    }
+  }
+
+  Future<void> _restoreHiddenBuiltins() async {
+    final catalog = _promptCatalog;
+    if (catalog == null) return;
+    try {
+      await widget.controller.aiSettingsStore.savePromptCatalog(
+        AiPromptCatalog(
+          customTemplates: catalog.customTemplates,
+          builtinOverrides: catalog.builtinOverrides,
+          defaultTemplateId: catalog.defaultTemplateId,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '恢复内置模板失败');
+    }
+  }
+
+  Future<void> _setHistoryRetention(int? limit) async {
+    final history = _history;
+    if (history == null || limit == null) return;
+    try {
+      await widget.controller.aiHistoryStore.save(history.withRetention(limit));
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '保存历史记录设置失败');
+    }
+  }
+
+  void _showHistoryResult(AiGenerationRecord record) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${record.bookTitle} · ${record.chapterTitle}'),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(child: SelectableText(record.result)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -4554,20 +4717,144 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             ),
           ],
           const SizedBox(height: 26),
-          Text('提示词', style: Theme.of(context).textTheme.headlineMedium),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '文风模板',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+              ),
+              TextButton.icon(
+                key: const ValueKey('add-ai-template'),
+                onPressed: () => _editTemplate(null),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('添加'),
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
-          Card(
-            child: ListTile(
-              key: const ValueKey('open-ai-prompts'),
-              leading: const Icon(Icons.edit_note_rounded),
-              title: const Text('编辑提示词'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => showAiPromptSettingsDialog(
-                context,
-                widget.controller.aiSettingsStore,
+          if (_promptCatalog == null && _error == null)
+            const Center(child: CircularProgressIndicator())
+          else if (_promptCatalog != null)
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  for (final (index, template)
+                      in _promptCatalog!.templates.indexed) ...[
+                    if (index > 0) const Divider(height: 1),
+                    ListTile(
+                      key: ValueKey('ai-template-${template.id}'),
+                      selected:
+                          template.id == _promptCatalog!.defaultTemplateId,
+                      leading: Icon(
+                        template.id == _promptCatalog!.defaultTemplateId
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
+                      ),
+                      title: Text(template.name),
+                      onTap: () => _selectTemplate(template),
+                      trailing: PopupMenuButton<String>(
+                        tooltip: '管理 ${template.name}',
+                        onSelected: (action) {
+                          if (action == 'edit') {
+                            _editTemplate(template);
+                          } else if (action == 'reset') {
+                            _resetBuiltin(template);
+                          } else {
+                            _deleteTemplate(template);
+                          }
+                        },
+                        itemBuilder: (context) => [
+                          const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                          if (template.isBuiltin &&
+                              _promptCatalog!.builtinOverrides.any(
+                                (item) => item.id == template.id,
+                              ))
+                            const PopupMenuItem(
+                              value: 'reset',
+                              child: Text('恢复内置内容'),
+                            ),
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Text('删除'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-          ),
+          if (_promptCatalog?.hiddenBuiltinIds.isNotEmpty == true)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                key: const ValueKey('restore-builtin-templates'),
+                onPressed: _restoreHiddenBuiltins,
+                child: const Text('恢复已删除的内置模板'),
+              ),
+            ),
+          const SizedBox(height: 26),
+          Text('生成历史', style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 12),
+          if (_history != null) ...[
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    title: const Text('累计生成次数'),
+                    trailing: Text('${_history!.totalCount} 次'),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    title: const Text('保留最近结果'),
+                    trailing: DropdownButton<int>(
+                      key: const ValueKey('ai-history-retention'),
+                      value: _history!.retentionLimit,
+                      items: [
+                        for (final limit
+                            in AiGenerationHistory.retentionOptions)
+                          DropdownMenuItem(
+                            value: limit,
+                            child: Text('$limit 条'),
+                          ),
+                      ],
+                      onChanged: _setHistoryRetention,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (_history!.records.isEmpty)
+              const Card(child: ListTile(title: Text('还没有生成记录')))
+            else
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    for (final (index, record)
+                        in _history!.records.indexed) ...[
+                      if (index > 0) const Divider(height: 1),
+                      ListTile(
+                        key: ValueKey('ai-history-${record.id}'),
+                        title: Text(
+                          '${record.bookTitle} · ${record.chapterTitle}',
+                        ),
+                        subtitle: Text(
+                          '${record.actionLabel} · ${record.model} · ${record.templateName} · ${record.createdAt.year}-${record.createdAt.month.toString().padLeft(2, '0')}-${record.createdAt.day.toString().padLeft(2, '0')}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        onTap: () => _showHistoryResult(record),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+          ],
         ],
       ),
     );
@@ -4579,7 +4866,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai.dev (28)';
+  static const _version = '0.4.0.ai.dev (29)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4608,7 +4895,9 @@ class AboutPage extends StatelessWidget {
           child: Text(
             '0.4.0.ai.dev\n'
             '· AI 编辑统一入口，可按选区、段落或光标范围处理，预览后采用\n'
-            '· AI 助手可保存并切换多组 API，提示词共用\n'
+            '· AI 助手可保存并切换多组 API，按次选择模型与文风模板\n'
+            '· 内置与自定义文风模板均可编辑、删除\n'
+            '· 记录成功生成次数和最近结果，可设置保留条数\n'
             '· API Key 仅保存在设备安全存储\n\n'
             '0.4.0-dev.21\n'
             '· 正文支持 Markdown 格式编辑与预览\n'

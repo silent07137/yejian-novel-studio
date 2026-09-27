@@ -381,3 +381,198 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
     ],
   );
 }
+
+Future<void> showAiPromptTemplateDialog(
+  BuildContext context,
+  AiSettingsStore store, {
+  AiPromptTemplate? template,
+}) => showDialog<void>(
+  context: context,
+  builder: (context) =>
+      _AiPromptTemplateDialog(store: store, template: template),
+);
+
+class _AiPromptTemplateDialog extends StatefulWidget {
+  const _AiPromptTemplateDialog({required this.store, this.template});
+
+  final AiSettingsStore store;
+  final AiPromptTemplate? template;
+
+  @override
+  State<_AiPromptTemplateDialog> createState() =>
+      _AiPromptTemplateDialogState();
+}
+
+class _AiPromptTemplateDialogState extends State<_AiPromptTemplateDialog> {
+  final _name = TextEditingController();
+  final _style = TextEditingController();
+  final _polish = TextEditingController();
+  final _continueWriting = TextEditingController();
+  final _rewrite = TextEditingController();
+  final _custom = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final template = widget.template;
+    _name.text = template?.name ?? '';
+    _style.text = template?.styleInstruction ?? '';
+    _polish.text = template?.polishPrompt ?? '';
+    _continueWriting.text = template?.continueWritingPrompt ?? '';
+    _rewrite.text = template?.rewritePrompt ?? '';
+    _custom.text = template?.customPrompt ?? '';
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = '请为文风模板命名');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final catalog = await widget.store.loadPromptCatalog();
+      final existing = widget.template;
+      if (existing != null && catalog.templateById(existing.id) == null) {
+        throw const AiRequestException('该文风模板已不存在，请重新打开');
+      }
+      final template = AiPromptTemplate(
+        id: existing?.id ?? newEntityId('style'),
+        name: name,
+        styleInstruction: _style.text.trim(),
+        polishPrompt: _polish.text.trim(),
+        continueWritingPrompt: _continueWriting.text.trim(),
+        rewritePrompt: _rewrite.text.trim(),
+        customPrompt: _custom.text.trim(),
+      );
+      await widget.store.savePromptCatalog(
+        AiPromptCatalog(
+          customTemplates: [
+            for (final item in catalog.customTemplates)
+              if (item.id == template.id && !template.isBuiltin)
+                template
+              else
+                item,
+            if (existing == null) template,
+          ],
+          builtinOverrides: [
+            for (final item in catalog.builtinOverrides)
+              if (item.id == template.id && template.isBuiltin)
+                template
+              else
+                item,
+            if (template.isBuiltin &&
+                !catalog.builtinOverrides.any((item) => item.id == template.id))
+              template,
+          ],
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultTemplateId: existing == null
+              ? template.id
+              : catalog.defaultTemplateId,
+        ),
+      );
+      if (mounted) Navigator.pop(context);
+    } on AiRequestException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } on Object {
+      if (mounted) setState(() => _error = '保存文风模板失败');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _style.dispose();
+    _polish.dispose();
+    _continueWriting.dispose();
+    _rewrite.dispose();
+    _custom.dispose();
+    super.dispose();
+  }
+
+  Widget _promptField(
+    String label,
+    String key,
+    TextEditingController controller,
+  ) => TextField(
+    key: ValueKey(key),
+    controller: controller,
+    minLines: 2,
+    maxLines: 5,
+    maxLength: 4000,
+    decoration: InputDecoration(
+      labelText: label,
+      hintText: '留空使用内置提示词',
+      border: const OutlineInputBorder(),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(widget.template == null ? '新建文风模板' : '编辑文风模板'),
+    content: SizedBox(
+      width: 460,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const ValueKey('ai-template-name'),
+              controller: _name,
+              maxLength: 40,
+              decoration: const InputDecoration(labelText: '模板名称'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-template-style'),
+              controller: _style,
+              minLines: 3,
+              maxLines: 5,
+              maxLength: 2000,
+              decoration: const InputDecoration(
+                labelText: '文风要求',
+                hintText: '例如：叙述克制，重视对话中的潜台词',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            ExpansionTile(
+              key: const ValueKey('ai-template-advanced'),
+              tilePadding: EdgeInsets.zero,
+              title: const Text('分操作提示词'),
+              children: [
+                _promptField('润色', 'ai-template-polish', _polish),
+                _promptField('续写', 'ai-template-continue', _continueWriting),
+                _promptField('改写', 'ai-template-rewrite', _rewrite),
+                _promptField('自定义', 'ai-template-custom', _custom),
+              ],
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        key: const ValueKey('save-ai-template'),
+        onPressed: _saving ? null : _save,
+        child: const Text('保存'),
+      ),
+    ],
+  );
+}

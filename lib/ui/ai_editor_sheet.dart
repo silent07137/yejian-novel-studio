@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../ai/ai_context.dart';
+import '../ai/ai_history.dart';
 import '../ai/ai_service.dart';
 import '../ai/ai_target.dart';
 import '../models/library_data.dart';
@@ -43,7 +44,10 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
   late AiTextScope _scope;
   bool _includeContext = true;
   bool _busy = false;
-  AiConfiguration? _configuration;
+  AiProviderCatalog? _providers;
+  AiPromptCatalog? _templates;
+  String? _providerId;
+  String? _templateId;
   String? _generated;
   String? _error;
   final _instruction = TextEditingController();
@@ -59,11 +63,41 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
 
   Future<void> _loadConfiguration() async {
     try {
-      final value = await widget.controller.aiSettingsStore.load();
-      if (mounted) setState(() => _configuration = value);
+      final providers = await widget.controller.aiSettingsStore.loadProviders();
+      final templates = await widget.controller.aiSettingsStore
+          .loadPromptCatalog();
+      if (mounted) {
+        setState(() {
+          _providers = providers;
+          _templates = templates;
+          _providerId = providers.profiles.any((item) => item.id == _providerId)
+              ? _providerId
+              : providers.activeId;
+          _templateId = templates.templateById(_templateId) != null
+              ? _templateId
+              : templates.defaultTemplateId;
+        });
+      }
     } on Object {
       if (mounted) setState(() => _error = '读取 AI 配置失败');
     }
+  }
+
+  AiConfiguration? get _selectedConfiguration {
+    final profile = _providers?.profiles
+        .where((item) => item.id == _providerId)
+        .firstOrNull;
+    final template = _templates?.templateById(_templateId);
+    if (profile == null || template == null) return null;
+    return AiConfiguration(
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      apiKey: profile.apiKey,
+      polishPrompt: template.promptFor(AiTextAction.polish),
+      continueWritingPrompt: template.promptFor(AiTextAction.continueWriting),
+      rewritePrompt: template.promptFor(AiTextAction.rewrite),
+      customPrompt: template.promptFor(AiTextAction.custom),
+    );
   }
 
   @override
@@ -100,7 +134,11 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
   }
 
   Future<void> _send(AiTextTarget target, String contextText) async {
-    final configuration = _configuration;
+    final configuration = _selectedConfiguration;
+    final profile = _providers?.profiles
+        .where((item) => item.id == _providerId)
+        .firstOrNull;
+    final template = _templates?.templateById(_templateId);
     if (configuration == null || !configuration.isComplete) {
       setState(() => _error = '请先配置 AI 服务地址、模型和 API Key');
       return;
@@ -118,6 +156,24 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
         customInstruction: _instruction.text.trim(),
       );
       if (mounted) setState(() => _generated = generated);
+      try {
+        final now = DateTime.now();
+        await widget.controller.aiHistoryStore.append(
+          AiGenerationRecord(
+            id: now.microsecondsSinceEpoch.toString(),
+            createdAt: now,
+            bookTitle: widget.book.title,
+            chapterTitle: widget.chapter.title,
+            action: _action,
+            providerName: profile?.name ?? '',
+            model: configuration.model,
+            templateName: template?.name ?? '',
+            result: generated,
+          ),
+        );
+      } on Object {
+        if (mounted) setState(() => _error = '结果已生成，但保存历史失败');
+      }
     } on AiRequestException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } on Object {
@@ -141,7 +197,7 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
             selectionStart: target.start,
             selectionEnd: target.end,
           );
-    final configuration = _configuration;
+    final configuration = _selectedConfiguration;
     final endpoint = configuration == null
         ? null
         : Uri.tryParse(configuration.baseUrl)?.host;
@@ -184,9 +240,60 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
               ),
               Expanded(
                 child: ListView(
+                  key: const ValueKey('ai-editor-content'),
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   children: [
                     if (generated == null) ...[
+                      InputDecorator(
+                        decoration: const InputDecoration(labelText: '模型配置'),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            key: const ValueKey('ai-model-select'),
+                            value: _providerId,
+                            isExpanded: true,
+                            hint: const Text('先添加 API'),
+                            items: [
+                              for (final profile
+                                  in _providers?.profiles ??
+                                      <AiProviderProfile>[])
+                                DropdownMenuItem(
+                                  value: profile.id,
+                                  child: Text(
+                                    '${profile.name} · ${profile.model}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                            ],
+                            onChanged: _busy
+                                ? null
+                                : (id) => setState(() => _providerId = id),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(labelText: '文风模板'),
+                        child: DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            key: const ValueKey('ai-template-select'),
+                            value: _templateId,
+                            isExpanded: true,
+                            items: [
+                              for (final template
+                                  in _templates?.templates ??
+                                      <AiPromptTemplate>[])
+                                DropdownMenuItem(
+                                  value: template.id,
+                                  child: Text(template.name),
+                                ),
+                            ],
+                            onChanged: _busy
+                                ? null
+                                : (id) => setState(() => _templateId = id),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       Wrap(
                         spacing: 8,
                         children: [
@@ -300,7 +407,7 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
                       Text(
                         '发送至 ${endpoint?.isNotEmpty == true ? endpoint : '待配置的 AI 服务'}。服务商可能收取费用。',
                       ),
-                      if (configuration != null && !configuration.isComplete)
+                      if (configuration == null || !configuration.isComplete)
                         TextButton.icon(
                           onPressed: () async {
                             await showAiSettingsDialog(

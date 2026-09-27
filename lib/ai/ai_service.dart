@@ -173,6 +173,190 @@ class AiProviderCatalog {
   }
 }
 
+class AiPromptTemplate {
+  const AiPromptTemplate({
+    required this.id,
+    required this.name,
+    this.styleInstruction = '',
+    this.polishPrompt = '',
+    this.continueWritingPrompt = '',
+    this.rewritePrompt = '',
+    this.customPrompt = '',
+  });
+
+  final String id;
+  final String name;
+  final String styleInstruction;
+  final String polishPrompt;
+  final String continueWritingPrompt;
+  final String rewritePrompt;
+  final String customPrompt;
+
+  bool get isBuiltin => id.startsWith('builtin-');
+
+  String promptFor(AiTextAction action) {
+    final override = switch (action) {
+      AiTextAction.polish => polishPrompt,
+      AiTextAction.continueWriting => continueWritingPrompt,
+      AiTextAction.rewrite => rewritePrompt,
+      AiTextAction.custom => customPrompt,
+    };
+    final base = override.trim().isEmpty
+        ? defaultAiPrompt(action)
+        : override.trim();
+    final style = styleInstruction.trim();
+    return style.isEmpty ? base : '$base\n文风要求：$style';
+  }
+
+  Map<String, String> toJson() => {
+    'id': id,
+    'name': name,
+    'styleInstruction': styleInstruction,
+    'polishPrompt': polishPrompt,
+    'continueWritingPrompt': continueWritingPrompt,
+    'rewritePrompt': rewritePrompt,
+    'customPrompt': customPrompt,
+  };
+
+  factory AiPromptTemplate.fromJson(Map<String, dynamic> json) {
+    String field(String key) {
+      final value = json[key];
+      if (value is! String) throw const FormatException('文风模板格式错误');
+      return value;
+    }
+
+    return AiPromptTemplate(
+      id: field('id'),
+      name: field('name'),
+      styleInstruction: field('styleInstruction'),
+      polishPrompt: field('polishPrompt'),
+      continueWritingPrompt: field('continueWritingPrompt'),
+      rewritePrompt: field('rewritePrompt'),
+      customPrompt: field('customPrompt'),
+    );
+  }
+}
+
+const builtinAiPromptTemplates = <AiPromptTemplate>[
+  AiPromptTemplate(id: 'builtin-default', name: '默认'),
+  AiPromptTemplate(
+    id: 'builtin-delicate',
+    name: '细腻抒情',
+    styleInstruction: '以具体感官和人物细微反应承载情绪，语言自然，不堆砌辞藻。',
+  ),
+  AiPromptTemplate(
+    id: 'builtin-concise',
+    name: '简洁克制',
+    styleInstruction: '句子凝练、信息清楚，少用形容词和解释性心理描写，保留必要留白。',
+  ),
+  AiPromptTemplate(
+    id: 'builtin-suspense',
+    name: '悬疑紧凑',
+    styleInstruction: '保持清晰的因果和紧凑节奏，利用具体线索制造悬念，不提前揭示答案。',
+  ),
+];
+
+class AiPromptCatalog {
+  const AiPromptCatalog({
+    this.customTemplates = const [],
+    this.builtinOverrides = const [],
+    this.hiddenBuiltinIds = const [],
+    this.defaultTemplateId = 'builtin-default',
+  });
+
+  final List<AiPromptTemplate> customTemplates;
+  final List<AiPromptTemplate> builtinOverrides;
+  final List<String> hiddenBuiltinIds;
+  final String defaultTemplateId;
+
+  List<AiPromptTemplate> get templates => [
+    for (final builtin in builtinAiPromptTemplates)
+      if (!hiddenBuiltinIds.contains(builtin.id))
+        builtinOverrides.where((item) => item.id == builtin.id).firstOrNull ??
+            builtin,
+    ...customTemplates,
+  ];
+
+  AiPromptTemplate? templateById(String? id) {
+    for (final template in templates) {
+      if (template.id == id) return template;
+    }
+    return null;
+  }
+
+  AiPromptTemplate get defaultTemplate =>
+      templateById(defaultTemplateId) ?? builtinAiPromptTemplates.first;
+
+  String encode() => jsonEncode({
+    'version': 1,
+    'defaultTemplateId': defaultTemplateId,
+    'customTemplates': customTemplates.map((item) => item.toJson()).toList(),
+    'builtinOverrides': builtinOverrides.map((item) => item.toJson()).toList(),
+    'hiddenBuiltinIds': hiddenBuiltinIds,
+  });
+
+  factory AiPromptCatalog.decode(String source) {
+    final decoded = jsonDecode(source);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['version'] != 1 ||
+        decoded['defaultTemplateId'] is! String ||
+        decoded['customTemplates'] is! List) {
+      throw const FormatException('文风模板格式错误');
+    }
+    final customTemplates = (decoded['customTemplates'] as List).map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('文风模板格式错误');
+      }
+      return AiPromptTemplate.fromJson(item);
+    }).toList();
+    final overridesRaw = decoded['builtinOverrides'] ?? <dynamic>[];
+    final hiddenRaw = decoded['hiddenBuiltinIds'] ?? <dynamic>[];
+    if (overridesRaw is! List || hiddenRaw is! List) {
+      throw const FormatException('文风模板格式错误');
+    }
+    final builtinOverrides = overridesRaw.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('文风模板格式错误');
+      }
+      return AiPromptTemplate.fromJson(item);
+    }).toList();
+    if (hiddenRaw.any((item) => item is! String)) {
+      throw const FormatException('文风模板格式错误');
+    }
+    final hiddenBuiltinIds = hiddenRaw.cast<String>();
+    final catalog = AiPromptCatalog(
+      customTemplates: customTemplates,
+      builtinOverrides: builtinOverrides,
+      hiddenBuiltinIds: hiddenBuiltinIds,
+      defaultTemplateId: decoded['defaultTemplateId'] as String,
+    );
+    if (customTemplates.any(
+          (template) =>
+              template.id.isEmpty ||
+              template.name.trim().isEmpty ||
+              template.isBuiltin,
+        ) ||
+        builtinOverrides.any(
+          (template) => !builtinAiPromptTemplates.any(
+            (builtin) => builtin.id == template.id,
+          ),
+        ) ||
+        hiddenBuiltinIds.any(
+          (id) => !builtinAiPromptTemplates.any((builtin) => builtin.id == id),
+        ) ||
+        builtinOverrides.map((item) => item.id).toSet().length !=
+            builtinOverrides.length ||
+        hiddenBuiltinIds.toSet().length != hiddenBuiltinIds.length ||
+        catalog.templates.map((template) => template.id).toSet().length !=
+            catalog.templates.length ||
+        catalog.templates.isEmpty ||
+        catalog.templateById(catalog.defaultTemplateId) == null) {
+      throw const FormatException('文风模板格式错误');
+    }
+    return catalog;
+  }
+}
+
 abstract interface class AiSettingsStore {
   Future<AiConfiguration> load();
 
@@ -180,6 +364,8 @@ abstract interface class AiSettingsStore {
   Future<void> save(AiConfiguration value);
   Future<AiProviderCatalog> loadProviders();
   Future<void> saveProviders(AiProviderCatalog value);
+  Future<AiPromptCatalog> loadPromptCatalog();
+  Future<void> savePromptCatalog(AiPromptCatalog value);
 }
 
 /// AI credentials are deliberately kept outside the book database and archives.
@@ -197,6 +383,7 @@ class SecureAiSettingsStore implements AiSettingsStore {
   static const _rewritePromptKey = 'ai.prompt.rewrite';
   static const _customPromptKey = 'ai.prompt.custom';
   static const _providersKey = 'ai.providers.v1';
+  static const _promptCatalogKey = 'ai.prompt_templates.v1';
 
   @override
   Future<AiProviderCatalog> loadProviders() async {
@@ -237,37 +424,82 @@ class SecureAiSettingsStore implements AiSettingsStore {
   }
 
   @override
+  Future<AiPromptCatalog> loadPromptCatalog() async {
+    final stored = await _storage.read(key: _promptCatalogKey);
+    if (stored != null) return AiPromptCatalog.decode(stored);
+    final polish = await _storage.read(key: _polishPromptKey) ?? '';
+    final continuation =
+        await _storage.read(key: _continueWritingPromptKey) ?? '';
+    final rewrite = await _storage.read(key: _rewritePromptKey) ?? '';
+    final custom = await _storage.read(key: _customPromptKey) ?? '';
+    if ([polish, continuation, rewrite, custom].every((item) => item.isEmpty)) {
+      return const AiPromptCatalog();
+    }
+    return AiPromptCatalog(
+      customTemplates: [
+        AiPromptTemplate(
+          id: 'legacy-prompt',
+          name: '原有提示词',
+          polishPrompt: polish,
+          continueWritingPrompt: continuation,
+          rewritePrompt: rewrite,
+          customPrompt: custom,
+        ),
+      ],
+      defaultTemplateId: 'legacy-prompt',
+    );
+  }
+
+  @override
+  Future<void> savePromptCatalog(AiPromptCatalog value) async {
+    AiPromptCatalog.decode(value.encode());
+    await _storage.write(key: _promptCatalogKey, value: value.encode());
+    await _storage.write(key: _polishPromptKey, value: null);
+    await _storage.write(key: _continueWritingPromptKey, value: null);
+    await _storage.write(key: _rewritePromptKey, value: null);
+    await _storage.write(key: _customPromptKey, value: null);
+  }
+
+  @override
   Future<AiConfiguration> load() async {
     final active = (await loadProviders()).activeProfile;
+    final template = (await loadPromptCatalog()).defaultTemplate;
     return AiConfiguration(
       baseUrl: active?.baseUrl ?? 'https://api.openai.com/v1',
       model: active?.model ?? '',
       apiKey: active?.apiKey ?? '',
-      polishPrompt: await _storage.read(key: _polishPromptKey) ?? '',
-      continueWritingPrompt:
-          await _storage.read(key: _continueWritingPromptKey) ?? '',
-      rewritePrompt: await _storage.read(key: _rewritePromptKey) ?? '',
-      customPrompt: await _storage.read(key: _customPromptKey) ?? '',
+      polishPrompt: template.promptFor(AiTextAction.polish),
+      continueWritingPrompt: template.promptFor(AiTextAction.continueWriting),
+      rewritePrompt: template.promptFor(AiTextAction.rewrite),
+      customPrompt: template.promptFor(AiTextAction.custom),
     );
   }
 
   @override
   Future<void> save(AiConfiguration value) async {
-    await _storage.write(
-      key: _polishPromptKey,
-      value: value.polishPrompt.trim(),
+    final catalog = await loadPromptCatalog();
+    final current = catalog.defaultTemplate;
+    final id = current.isBuiltin ? 'custom-default' : current.id;
+    final replacement = AiPromptTemplate(
+      id: id,
+      name: current.isBuiltin ? '自定义提示词' : current.name,
+      polishPrompt: value.polishPrompt,
+      continueWritingPrompt: value.continueWritingPrompt,
+      rewritePrompt: value.rewritePrompt,
+      customPrompt: value.customPrompt,
     );
-    await _storage.write(
-      key: _continueWritingPromptKey,
-      value: value.continueWritingPrompt.trim(),
-    );
-    await _storage.write(
-      key: _rewritePromptKey,
-      value: value.rewritePrompt.trim(),
-    );
-    await _storage.write(
-      key: _customPromptKey,
-      value: value.customPrompt.trim(),
+    await savePromptCatalog(
+      AiPromptCatalog(
+        customTemplates: [
+          for (final template in catalog.customTemplates)
+            if (template.id == id) replacement else template,
+          if (!catalog.customTemplates.any((template) => template.id == id))
+            replacement,
+        ],
+        builtinOverrides: catalog.builtinOverrides,
+        hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+        defaultTemplateId: id,
+      ),
     );
   }
 }

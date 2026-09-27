@@ -131,6 +131,42 @@ void main() {
     );
   });
 
+  test('旧提示词迁移成独立模板，内置模板可修改、隐藏及恢复', () async {
+    final storage = _MemorySecureStorage({'ai.prompt.polish': '旧润色要求'});
+    final store = SecureAiSettingsStore(storage: storage);
+    final migrated = await store.loadPromptCatalog();
+    expect(migrated.defaultTemplate.name, '原有提示词');
+    expect(migrated.defaultTemplate.promptFor(AiTextAction.polish), '旧润色要求');
+    await store.savePromptCatalog(
+      AiPromptCatalog(
+        customTemplates: migrated.customTemplates,
+        builtinOverrides: const [
+          AiPromptTemplate(
+            id: 'builtin-concise',
+            name: '精简版',
+            styleInstruction: '减少赘述',
+          ),
+        ],
+        hiddenBuiltinIds: const ['builtin-delicate'],
+        defaultTemplateId: 'builtin-concise',
+      ),
+    );
+    final loaded = await store.loadPromptCatalog();
+    expect(loaded.defaultTemplate.name, '精简版');
+    expect(
+      loaded.defaultTemplate.promptFor(AiTextAction.rewrite),
+      contains('减少赘述'),
+    );
+    expect(loaded.templateById('builtin-delicate'), isNull);
+    expect(storage.values.containsKey('ai.prompt.polish'), isFalse);
+    expect(
+      () => AiPromptCatalog.decode(
+        '{"version":1,"defaultTemplateId":"missing","customTemplates":[]}',
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('仅发送选区至 Chat Completions 兼容接口', () async {
     final transport = _FakeTransport();
     final service = AiTextService(transport: transport);

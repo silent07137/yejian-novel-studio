@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../ai/ai_service.dart';
+import '../ai/ai_history.dart';
 import '../data/local_store.dart';
 import '../domain/entity_id.dart';
 import '../domain/chapter_markdown.dart';
@@ -39,9 +40,11 @@ class AppController extends ChangeNotifier {
     DocumentSaver? documentSaver,
     this.projectAssetDirectory,
     AiSettingsStore? aiSettingsStore,
+    AiHistoryStore? aiHistoryStore,
     AiTextService? aiTextService,
   }) : documentSaver = documentSaver ?? SystemDocumentSaver(),
        aiSettingsStore = aiSettingsStore ?? const SecureAiSettingsStore(),
+       aiHistoryStore = aiHistoryStore ?? FileAiHistoryStore(),
        aiTextService = aiTextService ?? const AiTextService() {
     selectedBookId =
         data.activeBookId ?? (data.books.isEmpty ? null : data.books.first.id);
@@ -51,6 +54,7 @@ class AppController extends ChangeNotifier {
   final DataStore store;
   final DocumentSaver documentSaver;
   final AiSettingsStore aiSettingsStore;
+  final AiHistoryStore aiHistoryStore;
   final AiTextService aiTextService;
   final Directory? projectAssetDirectory;
   LibraryData data;
