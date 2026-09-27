@@ -4,13 +4,17 @@ import 'dart:io';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-enum AiTextAction { polish, continueWriting }
+enum AiTextAction { polish, continueWriting, rewrite, custom }
 
 String defaultAiPrompt(AiTextAction action) => switch (action) {
   AiTextAction.polish =>
     '你是中文小说编辑。润色所选文字，保留原有剧情事实、人物称呼、叙事视角和 Markdown 标记。只输出润色后的正文，不要解释。',
   AiTextAction.continueWriting =>
     '你是中文小说写作助手。根据所选文字续写一小段，保持原有叙事视角与文风。只输出新写的正文，不要重复原文或解释。',
+  AiTextAction.rewrite =>
+    '你是中文小说编辑。改写所选文字，保留剧情事实、人物关系、叙事视角和 Markdown 标记。只输出改写后的正文，不要解释。',
+  AiTextAction.custom =>
+    '你是中文小说创作助手。根据本次指令处理所选文字，尊重作品参考资料，不擅自改变已知设定。只输出处理结果，不要解释。',
 };
 
 class AiConfiguration {
@@ -20,6 +24,8 @@ class AiConfiguration {
     this.apiKey = '',
     this.polishPrompt = '',
     this.continueWritingPrompt = '',
+    this.rewritePrompt = '',
+    this.customPrompt = '',
   });
 
   final String baseUrl;
@@ -29,11 +35,15 @@ class AiConfiguration {
   /// Empty means the built-in prompt, so future default improvements still apply.
   final String polishPrompt;
   final String continueWritingPrompt;
+  final String rewritePrompt;
+  final String customPrompt;
 
   String promptFor(AiTextAction action) {
     final custom = switch (action) {
       AiTextAction.polish => polishPrompt,
       AiTextAction.continueWriting => continueWritingPrompt,
+      AiTextAction.rewrite => rewritePrompt,
+      AiTextAction.custom => customPrompt,
     };
     return custom.trim().isEmpty ? defaultAiPrompt(action) : custom.trim();
   }
@@ -44,12 +54,16 @@ class AiConfiguration {
     String? apiKey,
     String? polishPrompt,
     String? continueWritingPrompt,
+    String? rewritePrompt,
+    String? customPrompt,
   }) => AiConfiguration(
     baseUrl: baseUrl ?? this.baseUrl,
     model: model ?? this.model,
     apiKey: apiKey ?? this.apiKey,
     polishPrompt: polishPrompt ?? this.polishPrompt,
     continueWritingPrompt: continueWritingPrompt ?? this.continueWritingPrompt,
+    rewritePrompt: rewritePrompt ?? this.rewritePrompt,
+    customPrompt: customPrompt ?? this.customPrompt,
   );
 
   bool get isComplete =>
@@ -75,6 +89,8 @@ class SecureAiSettingsStore implements AiSettingsStore {
   static const _apiKeyKey = 'ai.api_key';
   static const _polishPromptKey = 'ai.prompt.polish';
   static const _continueWritingPromptKey = 'ai.prompt.continue_writing';
+  static const _rewritePromptKey = 'ai.prompt.rewrite';
+  static const _customPromptKey = 'ai.prompt.custom';
 
   @override
   Future<AiConfiguration> load() async => AiConfiguration(
@@ -85,6 +101,8 @@ class SecureAiSettingsStore implements AiSettingsStore {
     polishPrompt: await _storage.read(key: _polishPromptKey) ?? '',
     continueWritingPrompt:
         await _storage.read(key: _continueWritingPromptKey) ?? '',
+    rewritePrompt: await _storage.read(key: _rewritePromptKey) ?? '',
+    customPrompt: await _storage.read(key: _customPromptKey) ?? '',
   );
 
   @override
@@ -99,6 +117,14 @@ class SecureAiSettingsStore implements AiSettingsStore {
     await _storage.write(
       key: _continueWritingPromptKey,
       value: value.continueWritingPrompt.trim(),
+    );
+    await _storage.write(
+      key: _rewritePromptKey,
+      value: value.rewritePrompt.trim(),
+    );
+    await _storage.write(
+      key: _customPromptKey,
+      value: value.customPrompt.trim(),
     );
   }
 }
@@ -201,6 +227,8 @@ class AiTextService {
     required AiConfiguration configuration,
     required AiTextAction action,
     required String selectedText,
+    String contextText = '',
+    String customInstruction = '',
   }) async {
     if (!configuration.isComplete) {
       throw const AiRequestException('请先在应用设置中填写 AI 服务地址、模型与 API Key');
@@ -214,7 +242,26 @@ class AiTextService {
     if (selectedText.contains('yejian-image:')) {
       throw const AiRequestException('选区包含图片标记，请只选择正文文字');
     }
+    if (contextText.length > 5000) {
+      throw const AiRequestException('作品参考资料过长，请缩小发送范围');
+    }
+    if (action == AiTextAction.custom && customInstruction.trim().isEmpty) {
+      throw const AiRequestException('请填写本次 AI 指令');
+    }
+    if (customInstruction.length > 1000) {
+      throw const AiRequestException('本次 AI 指令不能超过 1000 字符');
+    }
     final instruction = configuration.promptFor(action);
+    final userContent =
+        contextText.trim().isEmpty && action != AiTextAction.custom
+        ? selectedText
+        : [
+            if (contextText.trim().isNotEmpty)
+              '【作品参考资料】\n${contextText.trim()}',
+            '【所选正文】\n$selectedText',
+            if (action == AiTextAction.custom)
+              '【本次指令】\n${customInstruction.trim()}',
+          ].join('\n\n');
     final result = await _transport.post(
       endpointFor(configuration.baseUrl),
       apiKey: configuration.apiKey.trim(),
@@ -222,7 +269,7 @@ class AiTextService {
         'model': configuration.model.trim(),
         'messages': [
           {'role': 'system', 'content': instruction},
-          {'role': 'user', 'content': selectedText},
+          {'role': 'user', 'content': userContent},
         ],
       },
     );
@@ -270,7 +317,7 @@ AiTextChange applyAiText({
   if (generated.isEmpty) {
     throw const AiRequestException('AI 没有返回可用正文');
   }
-  if (action == AiTextAction.polish) {
+  if (action != AiTextAction.continueWriting) {
     return AiTextChange(
       body.replaceRange(start, end, generated),
       start + generated.length,

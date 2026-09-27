@@ -137,7 +137,7 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    'Key 保存在设备安全存储中，不进入书籍工程文件。仅主动执行 AI 操作时发送所选文字。',
+                    'Key 保存在设备安全存储中，不进入书籍工程文件。只有确认 AI 操作时，才会发送所选文字及你选择附带的作品资料。',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                   if (_error != null) ...[
@@ -188,6 +188,8 @@ class _AiPromptSettingsDialog extends StatefulWidget {
 class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
   final _polish = TextEditingController();
   final _continueWriting = TextEditingController();
+  final _rewrite = TextEditingController();
+  final _custom = TextEditingController();
   AiConfiguration _loadedConfiguration = const AiConfiguration();
   bool _loading = true;
   bool _saving = false;
@@ -207,6 +209,8 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
       _loadedConfiguration = value;
       _polish.text = value.promptFor(AiTextAction.polish);
       _continueWriting.text = value.promptFor(AiTextAction.continueWriting);
+      _rewrite.text = value.promptFor(AiTextAction.rewrite);
+      _custom.text = value.promptFor(AiTextAction.custom);
     } on Object {
       if (mounted) {
         _loadFailed = true;
@@ -235,6 +239,11 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
             _continueWriting.text,
             AiTextAction.continueWriting,
           ),
+          rewritePrompt: _overrideOrDefault(
+            _rewrite.text,
+            AiTextAction.rewrite,
+          ),
+          customPrompt: _overrideOrDefault(_custom.text, AiTextAction.custom),
         ),
       );
       if (mounted) Navigator.pop(context);
@@ -249,6 +258,8 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
   void dispose() {
     _polish.dispose();
     _continueWriting.dispose();
+    _rewrite.dispose();
+    _custom.dispose();
     super.dispose();
   }
 
@@ -280,6 +291,22 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
                     action: AiTextAction.continueWriting,
                     fieldKey: 'ai-continue-prompt',
                     resetKey: 'reset-ai-continue-prompt',
+                  ),
+                  const SizedBox(height: 16),
+                  _promptField(
+                    label: '改写',
+                    controller: _rewrite,
+                    action: AiTextAction.rewrite,
+                    fieldKey: 'ai-rewrite-prompt',
+                    resetKey: 'reset-ai-rewrite-prompt',
+                  ),
+                  const SizedBox(height: 16),
+                  _promptField(
+                    label: '自定义指令',
+                    controller: _custom,
+                    action: AiTextAction.custom,
+                    fieldKey: 'ai-custom-prompt',
+                    resetKey: 'reset-ai-custom-prompt',
                   ),
                   if (_error != null) ...[
                     const SizedBox(height: 12),

@@ -1371,10 +1371,16 @@ void main() {
       find.byKey(const ValueKey('ai-polish-prompt')),
       '按我的文风润色，不要解释。',
     );
+    await tester.ensureVisible(find.byKey(const ValueKey('ai-rewrite-prompt')));
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-rewrite-prompt')),
+      '改写时保留视角。',
+    );
     await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
     await tester.tap(find.byKey(const ValueKey('save-ai-prompts')));
     await tester.pumpAndSettle();
     expect(aiSettings.value.polishPrompt, '按我的文风润色，不要解释。');
+    expect(aiSettings.value.rewritePrompt, '改写时保留视角。');
     expect(aiSettings.value.model, 'test-model');
     expect(aiSettings.value.apiKey, 'private-key');
     expect(data.toJson().toString(), isNot(contains('按我的文风润色')));
@@ -1447,7 +1453,8 @@ void main() {
     await tester.tap(find.text('确认发送'));
     await tester.pumpAndSettle();
     expect(transport.calls, 1);
-    expect(transport.sentText, original.substring(0, 4));
+    expect(transport.sentText, contains('【作品参考资料】'));
+    expect(transport.sentText, contains(original.substring(0, 4)));
     expect(find.text('AI 润色预览'), findsOneWidget);
     expect(body.text, original);
     await tester.tap(find.byKey(const ValueKey('apply-ai-result')));
@@ -1459,5 +1466,68 @@ void main() {
     expect(body.text, original);
     expect(tester.takeException(), isNull);
     await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('AI 自定义指令可关闭作品上下文，放弃结果不修改正文', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final transport = FakeAiTransport();
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: MemoryAiSettingsStore(
+        const AiConfiguration(model: 'test-model', apiKey: 'private-key'),
+      ),
+      aiTextService: AiTextService(transport: transport),
+    );
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(find.byType(TextField).last);
+    final body = field.controller!;
+    final original = body.text;
+    body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
+    final editor = find.byType(EditableText).last;
+    final toolbar = field.contextMenuBuilder!(
+      tester.element(editor),
+      tester.state<EditableTextState>(editor),
+    ) as AdaptiveTextSelectionToolbar;
+    toolbar.buttonItems!
+        .singleWhere((item) => item.label == 'AI 自定义')
+        .onPressed!();
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-custom-instruction')),
+      '改成第一人称',
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '下一步'))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.text('下一步'));
+    await tester.pumpAndSettle();
+    expect(find.text('本次 AI 指令'), findsNothing);
+    expect(find.text('AI 操作失败，请检查服务配置'), findsNothing);
+    expect(find.text('附带本书相关资料'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('ai-include-context')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认发送'));
+    await tester.pumpAndSettle();
+    expect(transport.calls, 1);
+    expect(transport.sentText, contains('【本次指令】\n改成第一人称'));
+    expect(transport.sentText, isNot(contains('【作品参考资料】')));
+    expect(body.text, original);
+    await tester.tap(find.text('放弃'));
+    await tester.pumpAndSettle();
+    expect(body.text, original);
+    expect(tester.takeException(), isNull);
   });
 }

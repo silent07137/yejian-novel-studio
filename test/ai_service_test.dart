@@ -86,6 +86,56 @@ void main() {
     );
   });
 
+  test('改写使用独立提示词；自定义指令和作品资料只在明确传入时发送', () async {
+    final transport = _FakeTransport();
+    final service = AiTextService(transport: transport);
+    await service.generate(
+      configuration: configuration.copyWith(rewritePrompt: '保持事实，改写文风。'),
+      action: AiTextAction.rewrite,
+      selectedText: '原句',
+      contextText: '【当前章节】旧馆',
+    );
+    var messages = transport.body?['messages'] as List;
+    expect((messages.first as Map)['content'], '保持事实，改写文风。');
+    expect((messages.last as Map)['content'], contains('【当前章节】旧馆'));
+    expect((messages.last as Map)['content'], contains('【所选正文】\n原句'));
+
+    await service.generate(
+      configuration: configuration,
+      action: AiTextAction.custom,
+      selectedText: '原句',
+      customInstruction: '改成第一人称',
+    );
+    messages = transport.body?['messages'] as List;
+    expect(
+      (messages.first as Map)['content'],
+      defaultAiPrompt(AiTextAction.custom),
+    );
+    expect((messages.last as Map)['content'], contains('【本次指令】\n改成第一人称'));
+    expect((messages.last as Map)['content'], isNot(contains('旧馆')));
+  });
+
+  test('自定义操作必须填写本次指令，参考资料必须限长', () async {
+    final service = AiTextService(transport: _FakeTransport());
+    expect(
+      service.generate(
+        configuration: configuration,
+        action: AiTextAction.custom,
+        selectedText: '正文',
+      ),
+      throwsA(isA<AiRequestException>()),
+    );
+    expect(
+      service.generate(
+        configuration: configuration,
+        action: AiTextAction.rewrite,
+        selectedText: '正文',
+        contextText: List.filled(5001, 'x').join(),
+      ),
+      throwsA(isA<AiRequestException>()),
+    );
+  });
+
   test('拒绝非 HTTPS 地址、图片标记与不完整配置', () async {
     expect(
       () => AiTextService.endpointFor('http://example.com/v1'),
@@ -133,6 +183,17 @@ void main() {
       action: AiTextAction.continueWriting,
     );
     expect(continued.body, '开头旧文\n\n下一段');
+
+    final rewritten = applyAiText(
+      body: '开头旧文',
+      expectedBody: '开头旧文',
+      start: 2,
+      end: 4,
+      expectedText: '旧文',
+      generatedText: '新文',
+      action: AiTextAction.rewrite,
+    );
+    expect(rewritten.body, '开头新文');
   });
 
   test('正文变化后不应用过期 AI 结果', () {
