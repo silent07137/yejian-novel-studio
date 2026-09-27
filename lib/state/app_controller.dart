@@ -25,6 +25,7 @@ enum WorkspacePage {
   export,
   settings,
   appSettings,
+  aiSettings,
   about,
   profile,
 }
@@ -87,6 +88,7 @@ class AppController extends ChangeNotifier {
     WorkspacePage.export => '导出工程',
     WorkspacePage.settings => '设置',
     WorkspacePage.appSettings => '应用设置',
+    WorkspacePage.aiSettings => 'AI 助手',
     WorkspacePage.about => '关于应用',
     WorkspacePage.profile => '个人中心',
   };
@@ -112,6 +114,7 @@ class AppController extends ChangeNotifier {
     WorkspacePage.home ||
     WorkspacePage.settings ||
     WorkspacePage.appSettings ||
+    WorkspacePage.aiSettings ||
     WorkspacePage.about ||
     WorkspacePage.profile => true,
     _ => false,
@@ -149,6 +152,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     if (page == WorkspacePage.appSettings ||
+        page == WorkspacePage.aiSettings ||
         page == WorkspacePage.about ||
         page == WorkspacePage.profile) {
       page = _pageHistory.isEmpty

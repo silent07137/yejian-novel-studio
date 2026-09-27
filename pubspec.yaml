@@ -17,7 +17,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # The UI displays 0.4.0.ai.dev; pubspec requires a SemVer prerelease separator.
-version: 0.4.0-ai.dev+27
+version: 0.4.0-ai.dev+28
 
 environment:
   sdk: ^3.13.4

@@ -1,30 +1,32 @@
 import 'package:flutter/material.dart';
 
 import '../ai/ai_service.dart';
+import '../domain/entity_id.dart';
 
 Future<void> showAiSettingsDialog(
   BuildContext context,
-  AiSettingsStore store,
-) => showDialog<void>(
+  AiSettingsStore store, {
+  AiProviderProfile? profile,
+}) => showDialog<void>(
   context: context,
-  builder: (context) => _AiSettingsDialog(store: store),
+  builder: (context) => _AiSettingsDialog(store: store, profile: profile),
 );
 
 class _AiSettingsDialog extends StatefulWidget {
-  const _AiSettingsDialog({required this.store});
+  const _AiSettingsDialog({required this.store, this.profile});
 
   final AiSettingsStore store;
+  final AiProviderProfile? profile;
 
   @override
   State<_AiSettingsDialog> createState() => _AiSettingsDialogState();
 }
 
 class _AiSettingsDialogState extends State<_AiSettingsDialog> {
+  final _name = TextEditingController();
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
   final _apiKey = TextEditingController();
-  AiConfiguration _loadedConfiguration = const AiConfiguration();
-  bool _loading = true;
   bool _saving = false;
   bool _showKey = false;
   String? _error;
@@ -32,40 +34,51 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
   @override
   void initState() {
     super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final value = await widget.store.load();
-      if (!mounted) return;
-      _loadedConfiguration = value;
-      _baseUrl.text = value.baseUrl;
-      _model.text = value.model;
-      _apiKey.text = value.apiKey;
-    } on Object {
-      if (mounted) _error = '无法读取 AI 配置，请检查设备安全存储';
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    final profile = widget.profile;
+    _name.text = profile?.name ?? '';
+    _baseUrl.text = profile?.baseUrl ?? const AiConfiguration().baseUrl;
+    _model.text = profile?.model ?? '';
+    _apiKey.text = profile?.apiKey ?? '';
   }
 
   Future<void> _save() async {
-    final value = _loadedConfiguration.copyWith(
-      baseUrl: _baseUrl.text,
-      model: _model.text,
-      apiKey: _apiKey.text,
-    );
     try {
-      AiTextService.endpointFor(value.baseUrl);
-      if (!value.isComplete) {
+      final baseUrl = _baseUrl.text.trim();
+      final model = _model.text.trim();
+      final apiKey = _apiKey.text.trim();
+      AiTextService.endpointFor(baseUrl);
+      if (model.isEmpty || apiKey.isEmpty) {
         throw const AiRequestException('请填写服务地址、模型与 API Key');
       }
       setState(() {
         _saving = true;
         _error = null;
       });
-      await widget.store.save(value);
+      final catalog = await widget.store.loadProviders();
+      final existing = widget.profile;
+      if (existing != null &&
+          !catalog.profiles.any((item) => item.id == existing.id)) {
+        throw const AiRequestException('该 API 配置已不存在，请重新打开');
+      }
+      final profile = AiProviderProfile(
+        id: existing?.id ?? newEntityId('ai'),
+        name: _name.text.trim().isEmpty ? model : _name.text.trim(),
+        baseUrl: baseUrl,
+        model: model,
+        apiKey: apiKey,
+      );
+      await widget.store.saveProviders(
+        AiProviderCatalog(
+          profiles: [
+            for (final item in catalog.profiles)
+              if (item.id == profile.id) profile else item,
+            if (existing == null) profile,
+          ],
+          activeId: existing == null
+              ? profile.id
+              : catalog.activeId ?? profile.id,
+        ),
+      );
       if (mounted) Navigator.pop(context);
     } on AiRequestException catch (error) {
       if (mounted) setState(() => _error = error.message);
@@ -78,6 +91,7 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
 
   @override
   void dispose() {
+    _name.dispose();
     _baseUrl.dispose();
     _model.dispose();
     _apiKey.dispose();
@@ -86,72 +100,72 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('AI 服务'),
+    title: Text(widget.profile == null ? '添加 API' : '编辑 API'),
     content: SizedBox(
       width: 440,
-      child: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('目前支持 Chat Completions 兼容接口。费用由你填写的服务商账户承担。'),
-                  const SizedBox(height: 16),
-                  TextField(
-                    key: const ValueKey('ai-base-url'),
-                    controller: _baseUrl,
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: 'API 地址',
-                      hintText: 'https://api.example.com/v1',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    key: const ValueKey('ai-model'),
-                    controller: _model,
-                    autocorrect: false,
-                    decoration: const InputDecoration(labelText: '模型 ID'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    key: const ValueKey('ai-api-key'),
-                    controller: _apiKey,
-                    obscureText: !_showKey,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    decoration: InputDecoration(
-                      labelText: 'API Key',
-                      suffixIcon: IconButton(
-                        tooltip: _showKey ? '隐藏 Key' : '显示 Key',
-                        onPressed: () => setState(() => _showKey = !_showKey),
-                        icon: Icon(
-                          _showKey
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Key 保存在设备安全存储中，不进入书籍工程文件。只有确认 AI 操作时，才会发送所选文字及你选择附带的作品资料。',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      _error!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    ),
-                  ],
-                ],
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const ValueKey('ai-provider-name'),
+              controller: _name,
+              decoration: const InputDecoration(labelText: '名称（可选）'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-base-url'),
+              controller: _baseUrl,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'API 地址',
+                hintText: 'https://api.example.com/v1',
               ),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-model'),
+              controller: _model,
+              autocorrect: false,
+              decoration: const InputDecoration(labelText: '模型 ID'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-api-key'),
+              controller: _apiKey,
+              obscureText: !_showKey,
+              autocorrect: false,
+              enableSuggestions: false,
+              decoration: InputDecoration(
+                labelText: 'API Key',
+                suffixIcon: IconButton(
+                  tooltip: _showKey ? '隐藏 Key' : '显示 Key',
+                  onPressed: () => setState(() => _showKey = !_showKey),
+                  icon: Icon(
+                    _showKey
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              '仅支持 HTTPS Chat Completions 接口。Key 保存在本机安全存储中，不进入工程文件。',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
     ),
     actions: [
       TextButton(
@@ -160,7 +174,7 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
       ),
       FilledButton(
         key: const ValueKey('save-ai-settings'),
-        onPressed: _loading || _saving ? null : _save,
+        onPressed: _saving ? null : _save,
         child: const Text('保存'),
       ),
     ],
@@ -275,8 +289,6 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('默认使用内置提示词。选中的正文会作为单独消息发送；修改提示词不会改变所选内容。'),
-                  const SizedBox(height: 16),
                   _promptField(
                     label: '润色',
                     controller: _polish,
@@ -364,7 +376,6 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
         decoration: InputDecoration(
           border: const OutlineInputBorder(),
           hintText: '留空使用内置提示词',
-          helperText: '留空或恢复默认后，不保存自定义内容',
         ),
       ),
     ],

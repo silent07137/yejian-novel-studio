@@ -72,9 +72,114 @@ class AiConfiguration {
       apiKey.trim().isNotEmpty;
 }
 
+class AiProviderProfile {
+  const AiProviderProfile({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    required this.model,
+    required this.apiKey,
+  });
+
+  final String id;
+  final String name;
+  final String baseUrl;
+  final String model;
+  final String apiKey;
+
+  AiProviderProfile copyWith({
+    String? name,
+    String? baseUrl,
+    String? model,
+    String? apiKey,
+  }) => AiProviderProfile(
+    id: id,
+    name: name ?? this.name,
+    baseUrl: baseUrl ?? this.baseUrl,
+    model: model ?? this.model,
+    apiKey: apiKey ?? this.apiKey,
+  );
+
+  Map<String, String> toJson() => {
+    'id': id,
+    'name': name,
+    'baseUrl': baseUrl,
+    'model': model,
+    'apiKey': apiKey,
+  };
+
+  factory AiProviderProfile.fromJson(Map<String, dynamic> json) {
+    String field(String key) {
+      final value = json[key];
+      if (value is! String) throw const FormatException('AI 配置格式错误');
+      return value;
+    }
+
+    return AiProviderProfile(
+      id: field('id'),
+      name: field('name'),
+      baseUrl: field('baseUrl'),
+      model: field('model'),
+      apiKey: field('apiKey'),
+    );
+  }
+}
+
+class AiProviderCatalog {
+  const AiProviderCatalog({this.profiles = const [], this.activeId});
+
+  final List<AiProviderProfile> profiles;
+  final String? activeId;
+
+  AiProviderProfile? get activeProfile {
+    for (final profile in profiles) {
+      if (profile.id == activeId) return profile;
+    }
+    return null;
+  }
+
+  String encode() => jsonEncode({
+    'version': 1,
+    'activeId': activeId,
+    'profiles': profiles.map((profile) => profile.toJson()).toList(),
+  });
+
+  factory AiProviderCatalog.decode(String source) {
+    final decoded = jsonDecode(source);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['version'] != 1 ||
+        decoded['profiles'] is! List) {
+      throw const FormatException('AI 配置格式错误');
+    }
+    final profiles = (decoded['profiles'] as List).map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('AI 配置格式错误');
+      }
+      return AiProviderProfile.fromJson(item);
+    }).toList();
+    final activeId = decoded['activeId'];
+    if (activeId != null && activeId is! String) {
+      throw const FormatException('AI 配置格式错误');
+    }
+    if (profiles.map((profile) => profile.id).toSet().length !=
+        profiles.length) {
+      throw const FormatException('AI 配置存在重复标识');
+    }
+    if (activeId != null &&
+        !profiles.any((profile) => profile.id == activeId)) {
+      throw const FormatException('选中的 API 配置不存在');
+    }
+    return AiProviderCatalog(profiles: profiles, activeId: activeId as String?);
+  }
+}
+
 abstract interface class AiSettingsStore {
   Future<AiConfiguration> load();
+
+  /// Saves shared prompts only; API profiles are changed through saveProviders.
   Future<void> save(AiConfiguration value);
+  Future<AiProviderCatalog> loadProviders();
+  Future<void> saveProviders(AiProviderCatalog value);
 }
 
 /// AI credentials are deliberately kept outside the book database and archives.
@@ -91,25 +196,63 @@ class SecureAiSettingsStore implements AiSettingsStore {
   static const _continueWritingPromptKey = 'ai.prompt.continue_writing';
   static const _rewritePromptKey = 'ai.prompt.rewrite';
   static const _customPromptKey = 'ai.prompt.custom';
+  static const _providersKey = 'ai.providers.v1';
 
   @override
-  Future<AiConfiguration> load() async => AiConfiguration(
-    baseUrl:
-        await _storage.read(key: _baseUrlKey) ?? 'https://api.openai.com/v1',
-    model: await _storage.read(key: _modelKey) ?? '',
-    apiKey: await _storage.read(key: _apiKeyKey) ?? '',
-    polishPrompt: await _storage.read(key: _polishPromptKey) ?? '',
-    continueWritingPrompt:
-        await _storage.read(key: _continueWritingPromptKey) ?? '',
-    rewritePrompt: await _storage.read(key: _rewritePromptKey) ?? '',
-    customPrompt: await _storage.read(key: _customPromptKey) ?? '',
-  );
+  Future<AiProviderCatalog> loadProviders() async {
+    final stored = await _storage.read(key: _providersKey);
+    if (stored != null) return AiProviderCatalog.decode(stored);
+    final baseUrl =
+        await _storage.read(key: _baseUrlKey) ?? 'https://api.openai.com/v1';
+    final model = await _storage.read(key: _modelKey) ?? '';
+    final apiKey = await _storage.read(key: _apiKeyKey) ?? '';
+    if (model.isEmpty && apiKey.isEmpty) return const AiProviderCatalog();
+    return AiProviderCatalog(
+      profiles: [
+        AiProviderProfile(
+          id: 'legacy',
+          name: '原有配置',
+          baseUrl: baseUrl,
+          model: model,
+          apiKey: apiKey,
+        ),
+      ],
+      activeId: 'legacy',
+    );
+  }
+
+  @override
+  Future<void> saveProviders(AiProviderCatalog value) async {
+    if (value.activeId != null && value.activeProfile == null) {
+      throw const AiRequestException('选中的 API 配置不存在');
+    }
+    if (value.profiles.map((profile) => profile.id).toSet().length !=
+        value.profiles.length) {
+      throw const AiRequestException('API 配置存在重复标识');
+    }
+    await _storage.write(key: _providersKey, value: value.encode());
+    await _storage.write(key: _baseUrlKey, value: null);
+    await _storage.write(key: _modelKey, value: null);
+    await _storage.write(key: _apiKeyKey, value: null);
+  }
+
+  @override
+  Future<AiConfiguration> load() async {
+    final active = (await loadProviders()).activeProfile;
+    return AiConfiguration(
+      baseUrl: active?.baseUrl ?? 'https://api.openai.com/v1',
+      model: active?.model ?? '',
+      apiKey: active?.apiKey ?? '',
+      polishPrompt: await _storage.read(key: _polishPromptKey) ?? '',
+      continueWritingPrompt:
+          await _storage.read(key: _continueWritingPromptKey) ?? '',
+      rewritePrompt: await _storage.read(key: _rewritePromptKey) ?? '',
+      customPrompt: await _storage.read(key: _customPromptKey) ?? '',
+    );
+  }
 
   @override
   Future<void> save(AiConfiguration value) async {
-    await _storage.write(key: _baseUrlKey, value: value.baseUrl.trim());
-    await _storage.write(key: _modelKey, value: value.model.trim());
-    await _storage.write(key: _apiKeyKey, value: value.apiKey.trim());
     await _storage.write(
       key: _polishPromptKey,
       value: value.polishPrompt.trim(),

@@ -27,7 +27,7 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
         .toList();
     return Column(
       children: [
-        const _FixedPageHeader(title: '人物与世界', subtitle: '共用基础模板，写下各自的不同。'),
+        const _FixedPageHeader(title: '人物与世界'),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
           child: Center(
@@ -743,7 +743,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
     final compact = MediaQuery.sizeOf(context).width < 600;
     return Column(
       children: [
-        const _FixedPageHeader(title: '故事结构', subtitle: '一套事件，三种看故事的方式。'),
+        const _FixedPageHeader(title: '故事结构'),
         Expanded(
           child: compact && _tool == _PlotTool.structure
               ? _buildMobileStructure(context, book)
@@ -3122,17 +3122,16 @@ class _EventCard extends StatelessWidget {
 }
 
 class _FixedPageHeader extends StatelessWidget {
-  const _FixedPageHeader({required this.title, required this.subtitle});
+  const _FixedPageHeader({required this.title});
 
   final String title;
-  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
     return Container(
       width: double.infinity,
-      height: compact ? 94 : 104,
+      height: compact ? 64 : 72,
       padding: EdgeInsets.fromLTRB(
         compact ? 16 : 28,
         compact ? 12 : 16,
@@ -3149,21 +3148,9 @@ class _FixedPageHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.headlineMedium),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
+            child: Text(
+              title,
+              style: Theme.of(context).textTheme.headlineMedium,
             ),
           ),
         ],

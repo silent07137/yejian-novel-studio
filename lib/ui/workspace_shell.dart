@@ -182,6 +182,7 @@ class _DesktopSidebar extends StatelessWidget {
             selected:
                 controller.page == WorkspacePage.settings ||
                 controller.page == WorkspacePage.appSettings ||
+                controller.page == WorkspacePage.aiSettings ||
                 controller.page == WorkspacePage.about ||
                 controller.page == WorkspacePage.profile,
             onTap: () => controller.navigate(WorkspacePage.settings),
@@ -672,6 +673,7 @@ class _WorkspaceBody extends StatelessWidget {
       WorkspacePage.appSettings => ApplicationSettingsPage(
         controller: controller,
       ),
+      WorkspacePage.aiSettings => AiSettingsPage(controller: controller),
       WorkspacePage.about => const AboutPage(),
       WorkspacePage.profile => ProfilePage(controller: controller),
     };
@@ -4133,7 +4135,6 @@ class SettingsPage extends StatelessWidget {
                   key: const ValueKey('open-app-settings'),
                   leading: const Icon(Icons.tune_rounded),
                   title: const Text('应用设置'),
-                  subtitle: const Text('显示模式、配色、字号与字体'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () =>
                       controller.openSubpage(WorkspacePage.appSettings),
@@ -4143,7 +4144,6 @@ class SettingsPage extends StatelessWidget {
                   key: const ValueKey('open-about-app'),
                   leading: const Icon(Icons.info_outline_rounded),
                   title: const Text('关于应用'),
-                  subtitle: const Text('版本、许可与数据说明'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => controller.openSubpage(WorkspacePage.about),
                 ),
@@ -4161,7 +4161,6 @@ class SettingsPage extends StatelessWidget {
                   key: const ValueKey('export-library-project'),
                   leading: const Icon(Icons.inventory_2_outlined),
                   title: const Text('导出作品集 .snss'),
-                  subtitle: const Text('打包书架中的全部作品'),
                   onTap: data.books.isEmpty
                       ? null
                       : () => _exportCollection(context),
@@ -4171,7 +4170,6 @@ class SettingsPage extends StatelessWidget {
                   key: const ValueKey('import-project-archive'),
                   leading: const Icon(Icons.file_open_outlined),
                   title: const Text('导入工程文件'),
-                  subtitle: const Text('支持 .sns 与 .snss，导入前预览'),
                   onTap: () => _importProject(context),
                 ),
               ],
@@ -4369,29 +4367,204 @@ class ApplicationSettingsPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 26),
-          Text('AI 助手', style: Theme.of(context).textTheme.headlineMedium),
-          const SizedBox(height: 18),
           Card(
             child: ListTile(
               key: const ValueKey('open-ai-settings'),
               leading: const Icon(Icons.auto_awesome_outlined),
-              title: const Text('配置 AI 服务'),
-              subtitle: const Text('自填 API 地址、模型与 Key'),
+              title: const Text('AI 助手'),
               trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () =>
-                  showAiSettingsDialog(context, controller.aiSettingsStore),
+              onTap: () => controller.openSubpage(WorkspacePage.aiSettings),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class AiSettingsPage extends StatefulWidget {
+  const AiSettingsPage({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<AiSettingsPage> createState() => _AiSettingsPageState();
+}
+
+class _AiSettingsPageState extends State<AiSettingsPage> {
+  AiProviderCatalog? _catalog;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    try {
+      final catalog = await widget.controller.aiSettingsStore.loadProviders();
+      if (mounted) {
+        setState(() {
+          _catalog = catalog;
+          _error = null;
+        });
+      }
+    } on Object {
+      if (mounted) setState(() => _error = '无法读取 API 配置，请检查设备安全存储');
+    }
+  }
+
+  Future<void> _edit(AiProviderProfile? profile) async {
+    await showAiSettingsDialog(
+      context,
+      widget.controller.aiSettingsStore,
+      profile: profile,
+    );
+    if (mounted) await _reload();
+  }
+
+  Future<void> _select(AiProviderProfile profile) async {
+    final catalog = _catalog;
+    if (catalog == null || catalog.activeId == profile.id) return;
+    try {
+      await widget.controller.aiSettingsStore.saveProviders(
+        AiProviderCatalog(profiles: catalog.profiles, activeId: profile.id),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '切换 API 失败');
+    }
+  }
+
+  Future<void> _delete(AiProviderProfile profile) async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除 API 配置'),
+        content: Text('确定删除「${profile.name}」吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (accepted != true || !mounted) return;
+    final catalog = _catalog;
+    if (catalog == null) return;
+    final remaining = catalog.profiles
+        .where((item) => item.id != profile.id)
+        .toList();
+    try {
+      await widget.controller.aiSettingsStore.saveProviders(
+        AiProviderCatalog(
+          profiles: remaining,
+          activeId: catalog.activeId == profile.id
+              ? remaining.firstOrNull?.id
+              : catalog.activeId,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '删除 API 配置失败');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final catalog = _catalog;
+    return _ContentPage(
+      reserveFloatingNavigation: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'API 配置',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+              ),
+              TextButton.icon(
+                key: const ValueKey('add-ai-provider'),
+                onPressed: () => _edit(null),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('添加'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (catalog == null && _error == null)
+            const Center(child: CircularProgressIndicator())
+          else if (catalog?.profiles.isEmpty ?? true)
+            const Card(child: ListTile(title: Text('尚未添加 API')))
+          else
+            Card(
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                children: [
+                  for (final (index, profile) in catalog!.profiles.indexed) ...[
+                    if (index > 0) const Divider(height: 1),
+                    ListTile(
+                      key: ValueKey('ai-provider-${profile.id}'),
+                      selected: profile.id == catalog.activeId,
+                      leading: Icon(
+                        profile.id == catalog.activeId
+                            ? Icons.check_circle_rounded
+                            : Icons.circle_outlined,
+                      ),
+                      title: Text(
+                        profile.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${profile.model} · ${Uri.tryParse(profile.baseUrl)?.host ?? profile.baseUrl}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => _select(profile),
+                      trailing: PopupMenuButton<String>(
+                        tooltip: '管理 ${profile.name}',
+                        onSelected: (action) => action == 'edit'
+                            ? _edit(profile)
+                            : _delete(profile),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(value: 'edit', child: Text('编辑')),
+                          PopupMenuItem(value: 'delete', child: Text('删除')),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+          const SizedBox(height: 26),
+          Text('提示词', style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 12),
           Card(
             child: ListTile(
               key: const ValueKey('open-ai-prompts'),
               leading: const Icon(Icons.edit_note_rounded),
-              title: const Text('编辑 AI 提示词'),
-              subtitle: const Text('润色、续写、改写、自定义；默认使用内置提示词'),
+              title: const Text('编辑提示词'),
               trailing: const Icon(Icons.chevron_right_rounded),
               onTap: () => showAiPromptSettingsDialog(
                 context,
-                controller.aiSettingsStore,
+                widget.controller.aiSettingsStore,
               ),
             ),
           ),
@@ -4406,7 +4579,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai.dev (27)';
+  static const _version = '0.4.0.ai.dev (28)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4434,8 +4607,9 @@ class AboutPage extends StatelessWidget {
         content: const SingleChildScrollView(
           child: Text(
             '0.4.0.ai.dev\n'
-            '· 试验性 AI 编辑：可查看并选择相关作品资料，确认发送，预览后采用\n'
-            '· 可配置 Chat Completions 兼容服务，Key 仅保存在设备安全存储\n\n'
+            '· AI 编辑统一入口，可按选区、段落或光标范围处理，预览后采用\n'
+            '· AI 助手可保存并切换多组 API，提示词共用\n'
+            '· API Key 仅保存在设备安全存储\n\n'
             '0.4.0-dev.21\n'
             '· 正文支持 Markdown 格式编辑与预览\n'
             '· 可插入独立段落图片，随工程备份并支持带图 Markdown 导出\n\n'
@@ -4498,7 +4672,7 @@ class AboutPage extends StatelessWidget {
       builder: (context) => AlertDialog(
         title: const Text('数据与隐私'),
         content: const Text(
-          '页间采用本地优先设计。作品、章节、角色、世界观与情节数据保存在设备本地。只有在你主动导出、分享文件，或确认使用 AI 功能时，相应数据才会离开应用。AI 功能会将所选文字、当前提示词及你在确认框中选择附带的作品参考资料发送到你配置的服务商；API Key 保存在设备安全存储，不包含在工程文件中。',
+          '页间采用本地优先设计。作品、章节、角色、世界观与情节数据保存在设备本地。只有在你主动导出、分享文件，或确认使用 AI 功能时，相应数据才会离开应用。AI 功能会将你选择的正文范围、当前提示词及在面板中选择附带的作品参考资料发送到当前使用的服务商；API Key 保存在设备安全存储，不包含在工程文件中。',
         ),
         actions: [
           TextButton(

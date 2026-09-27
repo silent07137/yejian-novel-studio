@@ -1,3 +1,4 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yejian_native/ai/ai_service.dart';
 
@@ -27,12 +28,108 @@ class _FakeTransport implements AiTransport {
   }
 }
 
+class _MemorySecureStorage extends FlutterSecureStorage {
+  _MemorySecureStorage(this.values);
+
+  final Map<String, String> values;
+
+  @override
+  Future<String?> read({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async => values[key];
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (value == null) {
+      values.remove(key);
+    } else {
+      values[key] = value;
+    }
+  }
+}
+
 void main() {
   const configuration = AiConfiguration(
     baseUrl: 'https://example.com/v1/',
     model: 'test-model',
     apiKey: 'user-owned-key',
   );
+
+  test('旧版单 API 配置自动显示为可切换配置，提示词保持共用', () async {
+    final storage = _MemorySecureStorage({
+      'ai.base_url': 'https://legacy.example/v1',
+      'ai.model': 'legacy-model',
+      'ai.api_key': 'legacy-key',
+      'ai.prompt.polish': '原有提示词',
+    });
+    final store = SecureAiSettingsStore(storage: storage);
+    final legacy = await store.loadProviders();
+    expect(legacy.profiles.single.name, '原有配置');
+    expect((await store.load()).apiKey, 'legacy-key');
+
+    await store.saveProviders(
+      AiProviderCatalog(
+        profiles: [
+          ...legacy.profiles,
+          const AiProviderProfile(
+            id: 'second',
+            name: '备用服务',
+            baseUrl: 'https://second.example/v1',
+            model: 'second-model',
+            apiKey: 'second-key',
+          ),
+        ],
+        activeId: 'second',
+      ),
+    );
+    final selected = await store.load();
+    expect(selected.apiKey, 'second-key');
+    expect(selected.polishPrompt, '原有提示词');
+    expect((await store.loadProviders()).profiles.length, 2);
+    expect(storage.values.containsKey('ai.api_key'), isFalse);
+    await store.save(selected.copyWith(polishPrompt: '新提示词'));
+    expect((await store.loadProviders()).activeId, 'second');
+    expect((await store.load()).apiKey, 'second-key');
+    expect((await store.load()).polishPrompt, '新提示词');
+  });
+
+  test('多组 API 序列化保留当前选择，损坏数据不会静默清空', () {
+    const catalog = AiProviderCatalog(
+      profiles: [
+        AiProviderProfile(
+          id: 'one',
+          name: '主服务',
+          baseUrl: 'https://example.com/v1',
+          model: 'novel-model',
+          apiKey: 'private-key',
+        ),
+      ],
+      activeId: 'one',
+    );
+    final decoded = AiProviderCatalog.decode(catalog.encode());
+    expect(decoded.activeProfile?.apiKey, 'private-key');
+    expect(
+      () => AiProviderCatalog.decode(
+        '{"version":1,"activeId":"missing","profiles":[]}',
+      ),
+      throwsFormatException,
+    );
+  });
 
   test('仅发送选区至 Chat Completions 兼容接口', () async {
     final transport = _FakeTransport();

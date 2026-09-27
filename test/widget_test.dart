@@ -26,15 +26,52 @@ class MemoryStore implements DataStore {
 }
 
 class MemoryAiSettingsStore implements AiSettingsStore {
-  MemoryAiSettingsStore(this.value);
+  MemoryAiSettingsStore(this.value) {
+    if (value.model.isNotEmpty || value.apiKey.isNotEmpty) {
+      catalog = AiProviderCatalog(
+        profiles: [
+          AiProviderProfile(
+            id: 'initial',
+            name: '原有配置',
+            baseUrl: value.baseUrl,
+            model: value.model,
+            apiKey: value.apiKey,
+          ),
+        ],
+        activeId: 'initial',
+      );
+    }
+  }
 
   AiConfiguration value;
+  AiProviderCatalog catalog = const AiProviderCatalog();
 
   @override
   Future<AiConfiguration> load() async => value;
 
   @override
-  Future<void> save(AiConfiguration value) async => this.value = value;
+  Future<void> save(AiConfiguration value) async {
+    this.value = this.value.copyWith(
+      polishPrompt: value.polishPrompt,
+      continueWritingPrompt: value.continueWritingPrompt,
+      rewritePrompt: value.rewritePrompt,
+      customPrompt: value.customPrompt,
+    );
+  }
+
+  @override
+  Future<AiProviderCatalog> loadProviders() async => catalog;
+
+  @override
+  Future<void> saveProviders(AiProviderCatalog catalog) async {
+    this.catalog = catalog;
+    final active = catalog.activeProfile;
+    value = value.copyWith(
+      baseUrl: active?.baseUrl ?? const AiConfiguration().baseUrl,
+      model: active?.model ?? '',
+      apiKey: active?.apiKey ?? '',
+    );
+  }
 }
 
 class FakeAiTransport implements AiTransport {
@@ -444,6 +481,8 @@ void main() {
     expect(find.textContaining('累计字数'), findsNothing);
     expect(find.text('应用设置'), findsOneWidget);
     expect(find.text('关于应用'), findsOneWidget);
+    expect(find.text('显示模式、配色、字号与字体'), findsNothing);
+    expect(find.text('版本、许可与数据说明'), findsNothing);
     expect(find.text('项目'), findsNothing);
     expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
   });
@@ -683,7 +722,7 @@ void main() {
     await tester.tap(find.text('设定').last);
     await tester.pumpAndSettle();
     expect(find.text('人物与世界'), findsOneWidget);
-    expect(find.text('共用基础模板，写下各自的不同。'), findsOneWidget);
+    expect(find.text('共用基础模板，写下各自的不同。'), findsNothing);
     expect(find.text('角色卡'), findsOneWidget);
     expect(find.text('世界观'), findsOneWidget);
     expect(find.text('12 项共用基础字段'), findsOneWidget);
@@ -696,7 +735,7 @@ void main() {
     await tester.tap(find.text('情节').last);
     await tester.pumpAndSettle();
     expect(find.text('故事结构'), findsOneWidget);
-    expect(find.text('一套事件，三种看故事的方式。'), findsOneWidget);
+    expect(find.text('一套事件，三种看故事的方式。'), findsNothing);
     expect(find.text('结构'), findsOneWidget);
     expect(find.text('大纲'), findsOneWidget);
     expect(find.text('伏笔'), findsOneWidget);
@@ -1314,6 +1353,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final entry = find.byKey(const ValueKey('open-ai-settings'));
+    expect(find.byKey(const ValueKey('open-ai-prompts')), findsNothing);
     await tester.drag(
       find.byType(SingleChildScrollView).last,
       const Offset(0, -260),
@@ -1321,6 +1361,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(entry);
     await tester.pumpAndSettle();
+    expect(find.text('API 配置'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('add-ai-provider')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-provider-name')),
+      '测试服务',
+    );
     await tester.enterText(
       find.byKey(const ValueKey('ai-model')),
       'test-model',
@@ -1335,6 +1382,7 @@ void main() {
     expect(aiSettings.value.model, 'test-model');
     expect(aiSettings.value.apiKey, 'private-key');
     expect(aiSettings.value.polishPrompt, '保留的润色提示词');
+    expect(aiSettings.catalog.profiles.single.name, '测试服务');
     expect(data.toJson().toString(), isNot(contains('private-key')));
     expect(tester.takeException(), isNull);
   });
@@ -1356,9 +1404,12 @@ void main() {
     await tester.pumpWidget(YejianApp(controller: controller));
     await tester.pumpAndSettle();
 
-    final entry = find.byKey(const ValueKey('open-ai-prompts'));
+    final entry = find.byKey(const ValueKey('open-ai-settings'));
     await tester.ensureVisible(entry);
     await tester.tap(entry);
+    await tester.pumpAndSettle();
+    final prompts = find.byKey(const ValueKey('open-ai-prompts'));
+    await tester.tap(prompts);
     await tester.pumpAndSettle();
     expect(
       tester
@@ -1385,8 +1436,8 @@ void main() {
     expect(aiSettings.value.apiKey, 'private-key');
     expect(data.toJson().toString(), isNot(contains('按我的文风润色')));
 
-    await tester.ensureVisible(entry);
-    await tester.tap(entry);
+    await tester.ensureVisible(prompts);
+    await tester.tap(prompts);
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('reset-ai-polish-prompt')));
     await tester.ensureVisible(find.byKey(const ValueKey('save-ai-prompts')));
@@ -1397,6 +1448,78 @@ void main() {
       aiSettings.value.promptFor(AiTextAction.polish),
       defaultAiPrompt(AiTextAction.polish),
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AI 助手可保存多组 API，切换和删除后使用正确配置', (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final aiSettings = MemoryAiSettingsStore(
+      const AiConfiguration(
+        baseUrl: 'https://first.example/v1',
+        model: 'first-model',
+        apiKey: 'first-key',
+        polishPrompt: '共同使用的提示词',
+      ),
+    );
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: aiSettings,
+    )..navigate(WorkspacePage.aiSettings);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('ai-provider-initial')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('add-ai-provider')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-provider-name')),
+      '备用服务',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-base-url')),
+      'https://second.example/v1',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-model')),
+      'second-model',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-api-key')),
+      'second-key',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-settings')));
+    await tester.pumpAndSettle();
+
+    expect(aiSettings.catalog.profiles.length, 2);
+    expect((await aiSettings.load()).apiKey, 'second-key');
+    expect((await aiSettings.load()).polishPrompt, '共同使用的提示词');
+    expect(data.toJson().toString(), isNot(contains('second-key')));
+
+    await tester.tap(find.byKey(const ValueKey('ai-provider-initial')));
+    await tester.pumpAndSettle();
+    expect((await aiSettings.load()).apiKey, 'first-key');
+    expect((await aiSettings.load()).model, 'first-model');
+    expect((await aiSettings.load()).polishPrompt, '共同使用的提示词');
+
+    final secondId = aiSettings.catalog.profiles.last.id;
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(ValueKey('ai-provider-$secondId')),
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(aiSettings.catalog.profiles.length, 1);
+    expect((await aiSettings.load()).apiKey, 'first-key');
     expect(tester.takeException(), isNull);
   });
 
