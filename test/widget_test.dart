@@ -1436,26 +1436,29 @@ void main() {
       tester.element(editor),
       tester.state<EditableTextState>(editor),
     ) as AdaptiveTextSelectionToolbar;
-    final polish = toolbar.buttonItems!.singleWhere(
-      (item) => item.label == 'AI 润色',
+    expect(toolbar.buttonItems!.map((item) => item.label), contains('添加标注'));
+    expect(
+      toolbar.buttonItems!.map((item) => item.label),
+      isNot(contains('AI 润色')),
     );
-    polish.onPressed!();
+    await tester.tap(find.byKey(const ValueKey('ai-editor-menu')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('发送所选文字以润色'), findsOneWidget);
+    expect(find.text('AI 助手'), findsOneWidget);
+    expect(find.byKey(const ValueKey('ai-scope-selection')), findsOneWidget);
     await tester.tap(find.text('取消').last);
     await tester.pumpAndSettle();
     expect(transport.calls, 0);
     expect(body.text, original);
 
     body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
-    polish.onPressed!();
+    await tester.tap(find.byKey(const ValueKey('ai-editor-menu')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认发送'));
     await tester.pumpAndSettle();
     expect(transport.calls, 1);
     expect(transport.sentText, contains('【作品参考资料】'));
     expect(transport.sentText, contains(original.substring(0, 4)));
-    expect(find.text('AI 润色预览'), findsOneWidget);
+    expect(find.text('AI 结果'), findsOneWidget);
     expect(body.text, original);
     await tester.tap(find.byKey(const ValueKey('apply-ai-result')));
     await tester.pumpAndSettle();
@@ -1492,31 +1495,20 @@ void main() {
     final body = field.controller!;
     final original = body.text;
     body.selection = const TextSelection(baseOffset: 0, extentOffset: 4);
-    final editor = find.byType(EditableText).last;
-    final toolbar = field.contextMenuBuilder!(
-      tester.element(editor),
-      tester.state<EditableTextState>(editor),
-    ) as AdaptiveTextSelectionToolbar;
-    toolbar.buttonItems!
-        .singleWhere((item) => item.label == 'AI 自定义')
-        .onPressed!();
+    await tester.tap(find.byKey(const ValueKey('ai-editor-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('自定义'));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('ai-custom-instruction')),
       '改成第一人称',
     );
     await tester.pumpAndSettle();
-    expect(
-      tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, '下一步'))
-          .onPressed,
-      isNotNull,
-    );
-    await tester.tap(find.text('下一步'));
-    await tester.pumpAndSettle();
-    expect(find.text('本次 AI 指令'), findsNothing);
     expect(find.text('AI 操作失败，请检查服务配置'), findsNothing);
     expect(find.text('附带本书相关资料'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('ai-include-context')),
+    );
     await tester.tap(find.byKey(const ValueKey('ai-include-context')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('确认发送'));
@@ -1529,5 +1521,60 @@ void main() {
     await tester.pumpAndSettle();
     expect(body.text, original);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('无需框选可从光标续写，并只在确认后插入', (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final transport = FakeAiTransport();
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: MemoryAiSettingsStore(
+        const AiConfiguration(model: 'test-model', apiKey: 'private-key'),
+      ),
+      aiTextService: AiTextService(transport: transport),
+    );
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.writing);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = tester
+        .widget<TextField>(find.byType(TextField).last)
+        .controller!;
+    final original = body.text;
+    body.selection = TextSelection.collapsed(offset: original.length);
+    await tester.tap(find.byKey(const ValueKey('ai-editor-menu')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const ValueKey('ai-scope-paragraph')))
+          .selected,
+      isTrue,
+    );
+    await tester.tap(find.widgetWithText(ChoiceChip, '续写'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(find.byKey(const ValueKey('ai-scope-cursor')))
+          .selected,
+      isTrue,
+    );
+    expect(body.text, original);
+    expect(transport.calls, 0);
+    await tester.tap(find.byKey(const ValueKey('ai-send')));
+    await tester.pumpAndSettle();
+    expect(transport.calls, 1);
+    expect(body.text, original);
+    await tester.tap(find.byKey(const ValueKey('apply-ai-result')));
+    await tester.pumpAndSettle();
+    expect(body.text, startsWith(original));
+    expect(body.text, contains('润色后的句子'));
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(milliseconds: 900));
   });
 }

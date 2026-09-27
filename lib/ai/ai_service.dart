@@ -8,13 +8,13 @@ enum AiTextAction { polish, continueWriting, rewrite, custom }
 
 String defaultAiPrompt(AiTextAction action) => switch (action) {
   AiTextAction.polish =>
-    '你是中文小说编辑。润色所选文字，保留原有剧情事实、人物称呼、叙事视角和 Markdown 标记。只输出润色后的正文，不要解释。',
+    '你是中文小说编辑。润色给定正文，保留原有剧情事实、人物称呼、叙事视角和 Markdown 标记。只输出润色后的正文，不要解释。',
   AiTextAction.continueWriting =>
-    '你是中文小说写作助手。根据所选文字续写一小段，保持原有叙事视角与文风。只输出新写的正文，不要重复原文或解释。',
+    '你是中文小说写作助手。根据给定正文续写一小段，保持原有叙事视角与文风。只输出新写的正文，不要重复原文或解释。',
   AiTextAction.rewrite =>
-    '你是中文小说编辑。改写所选文字，保留剧情事实、人物关系、叙事视角和 Markdown 标记。只输出改写后的正文，不要解释。',
+    '你是中文小说编辑。改写给定正文，保留剧情事实、人物关系、叙事视角和 Markdown 标记。只输出改写后的正文，不要解释。',
   AiTextAction.custom =>
-    '你是中文小说创作助手。根据本次指令处理所选文字，尊重作品参考资料，不擅自改变已知设定。只输出处理结果，不要解释。',
+    '你是中文小说创作助手。根据本次指令处理给定正文，尊重作品参考资料，不擅自改变已知设定。只输出处理结果，不要解释。',
 };
 
 class AiConfiguration {
@@ -234,7 +234,7 @@ class AiTextService {
       throw const AiRequestException('请先在应用设置中填写 AI 服务地址、模型与 API Key');
     }
     if (selectedText.trim().isEmpty) {
-      throw const AiRequestException('请先选中要处理的正文');
+      throw const AiRequestException('请先选择要处理的正文范围');
     }
     if (selectedText.length > 8000) {
       throw const AiRequestException('一次最多处理 8000 字符，请缩小选区');
@@ -258,7 +258,7 @@ class AiTextService {
         : [
             if (contextText.trim().isNotEmpty)
               '【作品参考资料】\n${contextText.trim()}',
-            '【所选正文】\n$selectedText',
+            '【处理正文】\n$selectedText',
             if (action == AiTextAction.custom)
               '【本次指令】\n${customInstruction.trim()}',
           ].join('\n\n');

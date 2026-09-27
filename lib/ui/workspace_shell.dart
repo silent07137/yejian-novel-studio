@@ -6,7 +6,6 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
-import '../ai/ai_context.dart';
 import '../ai/ai_service.dart';
 import '../domain/project_archive.dart';
 import '../models/library_data.dart';
@@ -14,6 +13,7 @@ import '../platform/document_saver.dart';
 import '../state/app_controller.dart';
 import '../theme/app_theme.dart';
 import 'ai_settings_dialog.dart';
+import 'ai_editor_sheet.dart';
 import 'book_management.dart';
 import 'book_pages.dart';
 
@@ -2139,232 +2139,48 @@ class _EditorPaneState extends State<_EditorPane> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<String?> _askAiInstruction() async {
-    var instruction = '';
-    return showDialog<String>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, updateDialog) => AlertDialog(
-          title: const Text('本次 AI 指令'),
-          content: TextField(
-            key: const ValueKey('ai-custom-instruction'),
-            autofocus: true,
-            minLines: 2,
-            maxLines: 5,
-            maxLength: 1000,
-            onChanged: (value) => updateDialog(() => instruction = value),
-            decoration: const InputDecoration(
-              hintText: '例如：改成第一人称，保留剧情事实',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: instruction.trim().isNotEmpty
-                  ? () => Navigator.pop(context, instruction.trim())
-                  : null,
-              child: const Text('下一步'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _runAiAction(AiTextAction action) async {
+  Future<void> _openAiSheet() async {
     if (_aiBusy) return;
-    final selection = _bodyController.selection;
-    if (!selection.isValid || selection.isCollapsed) {
-      _showAiError('请先选中要处理的正文');
-      return;
-    }
-    final selectedText = selection.textInside(_bodyController.text);
-    if (selectedText.trim().isEmpty ||
-        selectedText.length > 8000 ||
-        selectedText.contains('yejian-image:')) {
-      _showAiError(
-        selectedText.trim().isEmpty
-            ? '请先选中要处理的正文'
-            : selectedText.length > 8000
-            ? '一次最多处理 8000 字符，请缩小选区'
-            : '选区包含图片标记，请只选择正文文字',
-      );
+    final book = widget.controller.activeBook;
+    if (book == null) {
+      _showAiError('当前作品已关闭');
       return;
     }
     final sourceBody = _bodyController.text;
-    final start = selection.start;
-    final end = selection.end;
+    final selection = _bodyController.selection;
+    final start = selection.isValid ? selection.start : sourceBody.length;
+    final end = selection.isValid ? selection.end : sourceBody.length;
     final chapterId = widget.chapter.id;
+    _bodyFocusNode.unfocus();
+    setState(() => _aiBusy = true);
     try {
-      final customInstruction = action == AiTextAction.custom
-          ? await _askAiInstruction()
-          : '';
-      if (!mounted || customInstruction == null) return;
-      var configuration = await widget.controller.aiSettingsStore.load();
-      if (!mounted) return;
-      if (!configuration.isComplete) {
-        await showAiSettingsDialog(context, widget.controller.aiSettingsStore);
-        if (!mounted) return;
-        configuration = await widget.controller.aiSettingsStore.load();
-        if (!mounted || !configuration.isComplete) return;
-      }
-      final endpoint = AiTextService.endpointFor(configuration.baseUrl);
-      final label = switch (action) {
-        AiTextAction.polish => '润色',
-        AiTextAction.continueWriting => '续写',
-        AiTextAction.rewrite => '改写',
-        AiTextAction.custom => '按指令处理',
-      };
-      final book = widget.controller.activeBook;
-      if (book == null) throw const AiRequestException('当前作品已关闭');
-      final contextText = const AiContextBuilder().build(
-        book: book,
-        chapter: widget.chapter,
-        currentBody: sourceBody,
-        selectionStart: start,
-        selectionEnd: end,
-      );
-      var includeContext = true;
-      final confirmed = await showDialog<bool>(
+      final decision = await showModalBottomSheet<AiEditorDecision>(
         context: context,
-        builder: (context) => StatefulBuilder(
-          builder: (context, updateDialog) => AlertDialog(
-            title: Text('发送所选文字以$label？'),
-            content: SizedBox(
-              width: 520,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(context).height * .55,
-                ),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Text(
-                        '将所选的 ${selectedText.length} 个字符及当前提示词发送至 ${endpoint.host}。'
-                        '服务商可能收取费用。',
-                      ),
-                      SwitchListTile(
-                        key: const ValueKey('ai-include-context'),
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('附带本书相关资料'),
-                        subtitle: const Text('仅发送下方展示的当前章节片段与匹配资料'),
-                        value: includeContext,
-                        onChanged: (value) =>
-                            updateDialog(() => includeContext = value),
-                      ),
-                      if (includeContext) ...[
-                        const Text('本次附带内容'),
-                        const SizedBox(height: 8),
-                        SelectableText(contextText),
-                        const SizedBox(height: 12),
-                      ],
-                      const SizedBox(height: 12),
-                      const Text('所选正文'),
-                      SelectableText(selectedText),
-                      if (action == AiTextAction.custom) ...[
-                        const SizedBox(height: 12),
-                        const Text('本次指令'),
-                        SelectableText(customInstruction),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('确认发送'),
-              ),
-            ],
-          ),
+        isScrollControlled: true,
+        useSafeArea: true,
+        showDragHandle: false,
+        builder: (context) => AiEditorSheet(
+          controller: widget.controller,
+          book: book,
+          chapter: widget.chapter,
+          sourceBody: sourceBody,
+          selectionStart: start,
+          selectionEnd: end,
         ),
       );
-      if (confirmed != true || !mounted) return;
-      setState(() => _aiBusy = true);
-      late final String generated;
-      try {
-        generated = await widget.controller.aiTextService.generate(
-          configuration: configuration,
-          action: action,
-          selectedText: selectedText,
-          contextText: includeContext ? contextText : '',
-          customInstruction: customInstruction,
-        );
-      } finally {
-        if (mounted) setState(() => _aiBusy = false);
-      }
-      if (!mounted) return;
-      final decision = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('AI $label预览'),
-          content: SizedBox(
-            width: 520,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.sizeOf(context).height * .55,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text('原文'),
-                    SelectableText(selectedText),
-                    const SizedBox(height: 16),
-                    const Text('AI 结果'),
-                    SelectableText(generated),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('放弃'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'copy'),
-              child: const Text('复制结果'),
-            ),
-            FilledButton(
-              key: const ValueKey('apply-ai-result'),
-              onPressed: () => Navigator.pop(context, 'apply'),
-              child: Text(
-                action == AiTextAction.continueWriting ? '插入续写' : '替换选区',
-              ),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      if (decision == 'copy') {
-        await Clipboard.setData(ClipboardData(text: generated));
-        return;
-      }
-      if (decision != 'apply') return;
+      if (!mounted || decision == null) return;
       if (widget.controller.activeChapter?.id != chapterId) {
-        throw const AiRequestException('章节已切换，请重新选择后重试');
+        throw const AiRequestException('章节已切换，请重新操作');
       }
+      final target = decision.target;
       final change = applyAiText(
         body: _bodyController.text,
         expectedBody: sourceBody,
-        start: start,
-        end: end,
-        expectedText: selectedText,
-        generatedText: generated,
-        action: action,
+        start: target.start,
+        end: target.end,
+        expectedText: target.text,
+        generatedText: decision.generated,
+        action: decision.action,
       );
       _bodyController.value = TextEditingValue(
         text: change.body,
@@ -2375,6 +2191,8 @@ class _EditorPaneState extends State<_EditorPane> {
       _showAiError(error.message);
     } on Object {
       _showAiError('AI 操作失败，请检查服务配置');
+    } finally {
+      if (mounted) setState(() => _aiBusy = false);
     }
   }
 
@@ -3212,7 +3030,18 @@ class _EditorPaneState extends State<_EditorPane> {
                   ),
                 ],
                 const Spacer(),
-                if (MediaQuery.sizeOf(context).width >= 390)
+                IconButton(
+                  key: const ValueKey('ai-editor-menu'),
+                  tooltip: 'AI 助手',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 44,
+                    height: 44,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: _aiBusy ? null : _openAiSheet,
+                  icon: const Icon(Icons.auto_awesome_outlined),
+                ),
+                if (MediaQuery.sizeOf(context).width >= 480)
                   Text(
                     '${widget.chapter.wordCount} 字',
                     style: Theme.of(context).textTheme.bodySmall,
@@ -3252,17 +3081,18 @@ class _EditorPaneState extends State<_EditorPane> {
                         : Icons.visibility_outlined,
                   ),
                 ),
-                IconButton(
-                  key: const ValueKey('add-chapter-marker'),
-                  tooltip: '添加标注',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 44,
-                    height: 44,
+                if (MediaQuery.sizeOf(context).width >= 400)
+                  IconButton(
+                    key: const ValueKey('add-chapter-marker'),
+                    tooltip: '添加标注',
+                    constraints: const BoxConstraints.tightFor(
+                      width: 44,
+                      height: 44,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onPressed: _addMarker,
+                    icon: const Icon(Icons.bookmark_add_outlined),
                   ),
-                  padding: EdgeInsets.zero,
-                  onPressed: _addMarker,
-                  icon: const Icon(Icons.bookmark_add_outlined),
-                ),
                 IconButton(
                   key: const ValueKey('open-chapter-markers'),
                   tooltip: '正文标注',
@@ -3322,7 +3152,6 @@ class _EditorPaneState extends State<_EditorPane> {
               ],
             ),
           ),
-          if (_aiBusy) const LinearProgressIndicator(minHeight: 2),
           Expanded(
             child: Center(
               child: ConstrainedBox(
@@ -3441,45 +3270,6 @@ class _EditorPaneState extends State<_EditorPane> {
                                             if (!_bodyController
                                                 .selection
                                                 .isCollapsed) {
-                                              items.addAll([
-                                                ContextMenuButtonItem(
-                                                  label: 'AI 润色',
-                                                  onPressed: () {
-                                                    editable.hideToolbar();
-                                                    _runAiAction(
-                                                      AiTextAction.polish,
-                                                    );
-                                                  },
-                                                ),
-                                                ContextMenuButtonItem(
-                                                  label: 'AI 续写',
-                                                  onPressed: () {
-                                                    editable.hideToolbar();
-                                                    _runAiAction(
-                                                      AiTextAction
-                                                          .continueWriting,
-                                                    );
-                                                  },
-                                                ),
-                                                ContextMenuButtonItem(
-                                                  label: 'AI 改写',
-                                                  onPressed: () {
-                                                    editable.hideToolbar();
-                                                    _runAiAction(
-                                                      AiTextAction.rewrite,
-                                                    );
-                                                  },
-                                                ),
-                                                ContextMenuButtonItem(
-                                                  label: 'AI 自定义',
-                                                  onPressed: () {
-                                                    editable.hideToolbar();
-                                                    _runAiAction(
-                                                      AiTextAction.custom,
-                                                    );
-                                                  },
-                                                ),
-                                              ]);
                                               items.add(
                                                 ContextMenuButtonItem(
                                                   label: '添加标注',
@@ -3529,8 +3319,6 @@ class _EditorPaneState extends State<_EditorPane> {
               onResearch: _showResearch,
               onIdea: _captureIdea,
               onMarker: _addMarker,
-              onAiAction: _runAiAction,
-              aiBusy: _aiBusy,
             ),
         ],
       ),
@@ -3545,8 +3333,6 @@ class _EditorKeyboardToolbar extends StatelessWidget {
     required this.onResearch,
     required this.onIdea,
     required this.onMarker,
-    required this.onAiAction,
-    required this.aiBusy,
   });
 
   final UndoHistoryController undoController;
@@ -3554,8 +3340,6 @@ class _EditorKeyboardToolbar extends StatelessWidget {
   final VoidCallback onResearch;
   final VoidCallback onIdea;
   final VoidCallback onMarker;
-  final ValueChanged<AiTextAction> onAiAction;
-  final bool aiBusy;
 
   @override
   Widget build(BuildContext context) {
@@ -3600,31 +3384,6 @@ class _EditorKeyboardToolbar extends StatelessWidget {
                   tooltip: '添加标注',
                   onPressed: onMarker,
                   icon: const Icon(Icons.bookmark_add_outlined),
-                ),
-                PopupMenuButton<AiTextAction>(
-                  key: const ValueKey('ai-editor-menu'),
-                  tooltip: 'AI 助手',
-                  enabled: !aiBusy,
-                  onSelected: onAiAction,
-                  icon: const Icon(Icons.auto_awesome_outlined),
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: AiTextAction.polish,
-                      child: Text('润色选中文字'),
-                    ),
-                    PopupMenuItem(
-                      value: AiTextAction.continueWriting,
-                      child: Text('续写选中文字'),
-                    ),
-                    PopupMenuItem(
-                      value: AiTextAction.rewrite,
-                      child: Text('改写选中文字'),
-                    ),
-                    PopupMenuItem(
-                      value: AiTextAction.custom,
-                      child: Text('自定义指令'),
-                    ),
-                  ],
                 ),
               ],
             ),
@@ -4647,7 +4406,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai.dev (26)';
+  static const _version = '0.4.0.ai.dev (27)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',

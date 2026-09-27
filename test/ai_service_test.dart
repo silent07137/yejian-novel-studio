@@ -98,7 +98,7 @@ void main() {
     var messages = transport.body?['messages'] as List;
     expect((messages.first as Map)['content'], '保持事实，改写文风。');
     expect((messages.last as Map)['content'], contains('【当前章节】旧馆'));
-    expect((messages.last as Map)['content'], contains('【所选正文】\n原句'));
+    expect((messages.last as Map)['content'], contains('【处理正文】\n原句'));
 
     await service.generate(
       configuration: configuration,
