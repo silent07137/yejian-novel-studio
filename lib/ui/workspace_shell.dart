@@ -656,13 +656,21 @@ class _AppNavigationItem extends StatelessWidget {
   }
 }
 
-class _WorkspaceBody extends StatelessWidget {
+class _WorkspaceBody extends StatefulWidget {
   const _WorkspaceBody({required this.controller});
 
   final AppController controller;
 
   @override
+  State<_WorkspaceBody> createState() => _WorkspaceBodyState();
+}
+
+class _WorkspaceBodyState extends State<_WorkspaceBody> {
+  final PageStorageBucket _pageStorage = PageStorageBucket();
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final content = switch (controller.page) {
       WorkspacePage.home => HomePage(controller: controller),
       WorkspacePage.bookOverview => BookOverviewPage(controller: controller),
@@ -675,6 +683,7 @@ class _WorkspaceBody extends StatelessWidget {
         controller: controller,
       ),
       WorkspacePage.aiSettings => AiSettingsPage(controller: controller),
+      WorkspacePage.aiHistory => AiHistoryPage(controller: controller),
       WorkspacePage.about => const AboutPage(),
       WorkspacePage.profile => ProfilePage(controller: controller),
     };
@@ -682,25 +691,31 @@ class _WorkspaceBody extends StatelessWidget {
       children: [
         _TopBar(controller: controller),
         Expanded(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            reverseDuration: const Duration(milliseconds: 180),
-            layoutBuilder: (currentChild, previousChildren) => Stack(
-              alignment: Alignment.topCenter,
-              fit: StackFit.expand,
-              children: [...previousChildren, ?currentChild],
-            ),
-            transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0.025, 0),
-                  end: Offset.zero,
-                ).animate(animation),
-                child: SizedBox.expand(child: child),
+          child: PageStorage(
+            bucket: _pageStorage,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              reverseDuration: const Duration(milliseconds: 180),
+              layoutBuilder: (currentChild, previousChildren) => Stack(
+                alignment: Alignment.topCenter,
+                fit: StackFit.expand,
+                children: [...previousChildren, ?currentChild],
+              ),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.025, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: SizedBox.expand(child: child),
+                ),
+              ),
+              child: KeyedSubtree(
+                key: PageStorageKey(controller.page),
+                child: content,
               ),
             ),
-            child: KeyedSubtree(key: ValueKey(controller.page), child: content),
           ),
         ),
       ],
@@ -1992,7 +2007,11 @@ class _EditorPaneState extends State<_EditorPane> {
     _bodyController = _MarkedBodyController(widget.chapter);
     _bodyFocusNode = FocusNode();
     _undoController = UndoHistoryController();
-    _bodyScrollController = ScrollController()..addListener(_onBodyScroll);
+    _bodyScrollController = ScrollController(
+      initialScrollOffset: widget.controller.editorScrollOffset(
+        widget.chapter.id,
+      ),
+    )..addListener(_onBodyScroll);
     _titleController.addListener(_commitTitleWhenCompositionEnds);
     _bodyController.addListener(_commitBodyWhenCompositionEnds);
   }
@@ -2200,6 +2219,12 @@ class _EditorPaneState extends State<_EditorPane> {
   }
 
   void _onBodyScroll() {
+    if (_bodyScrollController.hasClients) {
+      widget.controller.saveEditorScrollOffset(
+        widget.chapter.id,
+        _bodyScrollController.offset,
+      );
+    }
     if (_showParagraphNumbers && mounted) setState(() {});
   }
 
@@ -4395,7 +4420,7 @@ class AiSettingsPage extends StatefulWidget {
 class _AiSettingsPageState extends State<AiSettingsPage> {
   AiProviderCatalog? _catalog;
   AiPromptCatalog? _promptCatalog;
-  AiGenerationHistory? _history;
+  AiOperationPromptCatalog? _operationCatalog;
   String? _error;
 
   @override
@@ -4409,19 +4434,14 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       final catalog = await widget.controller.aiSettingsStore.loadProviders();
       final prompts = await widget.controller.aiSettingsStore
           .loadPromptCatalog();
-      AiGenerationHistory? history;
-      String? historyError;
-      try {
-        history = await widget.controller.aiHistoryStore.load();
-      } on Object {
-        historyError = '无法读取生成历史，请检查本地记录文件';
-      }
+      final operations = await widget.controller.aiSettingsStore
+          .loadOperationPromptCatalog();
       if (mounted) {
         setState(() {
           _catalog = catalog;
           _promptCatalog = prompts;
-          _history = history;
-          _error = historyError;
+          _operationCatalog = operations;
+          _error = null;
         });
       }
     } on Object {
@@ -4609,34 +4629,119 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     }
   }
 
-  Future<void> _setHistoryRetention(int? limit) async {
-    final history = _history;
-    if (history == null || limit == null) return;
+  Future<void> _editOperation(AiOperationPrompt? prompt) async {
+    await showAiOperationPromptDialog(
+      context,
+      widget.controller.aiSettingsStore,
+      prompt: prompt,
+    );
+    if (mounted) await _reload();
+  }
+
+  Future<void> _selectOperation(AiOperationPrompt prompt) async {
+    final catalog = _operationCatalog;
+    if (catalog == null || catalog.defaultFor(prompt.action).id == prompt.id) {
+      return;
+    }
     try {
-      await widget.controller.aiHistoryStore.save(history.withRetention(limit));
+      await widget.controller.aiSettingsStore.saveOperationPromptCatalog(
+        AiOperationPromptCatalog(
+          customPrompts: catalog.customPrompts,
+          builtinOverrides: catalog.builtinOverrides,
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultIds: {...catalog.defaultIds, prompt.action.name: prompt.id},
+        ),
+      );
       await _reload();
     } on Object {
-      if (mounted) setState(() => _error = '保存历史记录设置失败');
+      if (mounted) setState(() => _error = '切换提示词失败');
     }
   }
 
-  void _showHistoryResult(AiGenerationRecord record) {
-    showDialog<void>(
+  Future<void> _deleteOperation(AiOperationPrompt prompt) async {
+    final catalog = _operationCatalog;
+    if (catalog == null) return;
+    if (catalog.forAction(prompt.action).length <= 1) {
+      setState(() => _error = '每种操作至少保留一条提示词');
+      return;
+    }
+    final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${record.bookTitle} · ${record.chapterTitle}'),
-        content: SizedBox(
-          width: 440,
-          child: SingleChildScrollView(child: SelectableText(record.result)),
-        ),
+        title: const Text('删除提示词'),
+        content: Text('确定删除「${prompt.name}」吗？'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
           ),
         ],
       ),
     );
+    if (accepted != true || !mounted) return;
+    final defaults = Map<String, String>.of(catalog.defaultIds);
+    if (defaults[prompt.action.name] == prompt.id) {
+      defaults.remove(prompt.action.name);
+    }
+    try {
+      await widget.controller.aiSettingsStore.saveOperationPromptCatalog(
+        AiOperationPromptCatalog(
+          customPrompts: catalog.customPrompts
+              .where((item) => item.id != prompt.id)
+              .toList(),
+          builtinOverrides: catalog.builtinOverrides,
+          hiddenBuiltinIds: [
+            ...catalog.hiddenBuiltinIds,
+            if (prompt.isBuiltin) prompt.id,
+          ],
+          defaultIds: defaults,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '删除提示词失败');
+    }
+  }
+
+  Future<void> _resetOperation(AiOperationPrompt prompt) async {
+    final catalog = _operationCatalog;
+    if (catalog == null) return;
+    try {
+      await widget.controller.aiSettingsStore.saveOperationPromptCatalog(
+        AiOperationPromptCatalog(
+          customPrompts: catalog.customPrompts,
+          builtinOverrides: catalog.builtinOverrides
+              .where((item) => item.id != prompt.id)
+              .toList(),
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultIds: catalog.defaultIds,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '恢复内置提示词失败');
+    }
+  }
+
+  Future<void> _restoreOperations() async {
+    final catalog = _operationCatalog;
+    if (catalog == null) return;
+    try {
+      await widget.controller.aiSettingsStore.saveOperationPromptCatalog(
+        AiOperationPromptCatalog(
+          customPrompts: catalog.customPrompts,
+          builtinOverrides: catalog.builtinOverrides,
+          defaultIds: catalog.defaultIds,
+        ),
+      );
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '恢复内置提示词失败');
+    }
   }
 
   @override
@@ -4797,22 +4902,222 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               ),
             ),
           const SizedBox(height: 26),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '操作提示词',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+              ),
+              TextButton.icon(
+                key: const ValueKey('add-ai-operation'),
+                onPressed: () => _editOperation(null),
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('添加'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_operationCatalog == null && _error == null)
+            const Center(child: CircularProgressIndicator())
+          else if (_operationCatalog != null)
+            for (final action in AiTextAction.values) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 6),
+                child: Text(
+                  aiActionLabel(action),
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    for (final (index, prompt)
+                        in _operationCatalog!.forAction(action).indexed) ...[
+                      if (index > 0) const Divider(height: 1),
+                      ListTile(
+                        key: ValueKey('ai-operation-${prompt.id}'),
+                        selected:
+                            prompt.id ==
+                            _operationCatalog!.defaultFor(action).id,
+                        leading: Icon(
+                          prompt.id == _operationCatalog!.defaultFor(action).id
+                              ? Icons.check_circle_rounded
+                              : Icons.circle_outlined,
+                        ),
+                        title: Text(
+                          prompt.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          prompt.content,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () => _selectOperation(prompt),
+                        trailing: PopupMenuButton<String>(
+                          tooltip: '管理 ${prompt.name}',
+                          onSelected: (value) {
+                            if (value == 'edit') {
+                              _editOperation(prompt);
+                            } else if (value == 'reset') {
+                              _resetOperation(prompt);
+                            } else {
+                              _deleteOperation(prompt);
+                            }
+                          },
+                          itemBuilder: (context) => [
+                            const PopupMenuItem(
+                              value: 'edit',
+                              child: Text('编辑'),
+                            ),
+                            if (prompt.isBuiltin &&
+                                _operationCatalog!.builtinOverrides.any(
+                                  (item) => item.id == prompt.id,
+                                ))
+                              const PopupMenuItem(
+                                value: 'reset',
+                                child: Text('恢复内置内容'),
+                              ),
+                            const PopupMenuItem(
+                              value: 'delete',
+                              child: Text('删除'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          if (_operationCatalog?.hiddenBuiltinIds.isNotEmpty == true)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                key: const ValueKey('restore-builtin-operations'),
+                onPressed: _restoreOperations,
+                child: const Text('恢复已删除的内置提示词'),
+              ),
+            ),
+          const SizedBox(height: 26),
+          Card(
+            child: ListTile(
+              key: const ValueKey('open-ai-history'),
+              leading: const Icon(Icons.history_rounded),
+              title: const Text('生成历史'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () =>
+                  widget.controller.openSubpage(WorkspacePage.aiHistory),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class AiHistoryPage extends StatefulWidget {
+  const AiHistoryPage({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<AiHistoryPage> createState() => _AiHistoryPageState();
+}
+
+class _AiHistoryPageState extends State<AiHistoryPage> {
+  AiGenerationHistory? _history;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    try {
+      final history = await widget.controller.aiHistoryStore.load();
+      if (mounted) {
+        setState(() {
+          _history = history;
+          _error = null;
+        });
+      }
+    } on Object {
+      if (mounted) setState(() => _error = '无法读取生成历史，请检查本地记录文件');
+    }
+  }
+
+  Future<void> _setRetention(int? limit) async {
+    final history = _history;
+    if (history == null || limit == null) return;
+    try {
+      await widget.controller.aiHistoryStore.save(history.withRetention(limit));
+      await _reload();
+    } on Object {
+      if (mounted) setState(() => _error = '保存历史记录设置失败');
+    }
+  }
+
+  void _showResult(AiGenerationRecord record) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          '${record.bookTitle} · ${record.chapterTitle}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        content: SizedBox(
+          width: 440,
+          child: SingleChildScrollView(child: SelectableText(record.result)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final history = _history;
+    return _ContentPage(
+      reserveFloatingNavigation: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
           Text('生成历史', style: Theme.of(context).textTheme.headlineMedium),
           const SizedBox(height: 12),
-          if (_history != null) ...[
+          if (_error != null)
+            Text(
+              _error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            )
+          else if (history == null)
+            const Center(child: CircularProgressIndicator())
+          else ...[
             Card(
               child: Column(
                 children: [
                   ListTile(
                     title: const Text('累计生成次数'),
-                    trailing: Text('${_history!.totalCount} 次'),
+                    trailing: Text('${history.totalCount} 次'),
                   ),
                   const Divider(height: 1),
                   ListTile(
                     title: const Text('保留最近结果'),
                     trailing: DropdownButton<int>(
                       key: const ValueKey('ai-history-retention'),
-                      value: _history!.retentionLimit,
+                      value: history.retentionLimit,
                       items: [
                         for (final limit
                             in AiGenerationHistory.retentionOptions)
@@ -4821,26 +5126,27 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                             child: Text('$limit 条'),
                           ),
                       ],
-                      onChanged: _setHistoryRetention,
+                      onChanged: _setRetention,
                     ),
                   ),
                 ],
               ),
             ),
-            if (_history!.records.isEmpty)
+            if (history.records.isEmpty)
               const Card(child: ListTile(title: Text('还没有生成记录')))
             else
               Card(
                 clipBehavior: Clip.antiAlias,
                 child: Column(
                   children: [
-                    for (final (index, record)
-                        in _history!.records.indexed) ...[
+                    for (final (index, record) in history.records.indexed) ...[
                       if (index > 0) const Divider(height: 1),
                       ListTile(
                         key: ValueKey('ai-history-${record.id}'),
                         title: Text(
                           '${record.bookTitle} · ${record.chapterTitle}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text(
                           '${record.actionLabel} · ${record.model} · ${record.templateName} · ${record.createdAt.year}-${record.createdAt.month.toString().padLeft(2, '0')}-${record.createdAt.day.toString().padLeft(2, '0')}',
@@ -4848,7 +5154,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         trailing: const Icon(Icons.chevron_right_rounded),
-                        onTap: () => _showHistoryResult(record),
+                        onTap: () => _showResult(record),
                       ),
                     ],
                   ],
@@ -4866,7 +5172,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai.dev (29)';
+  static const _version = '0.4.0.ai-dev.30 (30)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -4893,6 +5199,10 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0.ai-dev.30\n'
+            '· 修复长名称和表单在窄屏下的显示\n'
+            '· 生成历史移至独立页面，修复设置返回与位置重置\n'
+            '· 操作提示词与文风模板分开配置，可编辑默认词并新增自定义词\n\n'
             '0.4.0.ai.dev\n'
             '· AI 编辑统一入口，可按选区、段落或光标范围处理，预览后采用\n'
             '· AI 助手可保存并切换多组 API，按次选择模型与文风模板\n'

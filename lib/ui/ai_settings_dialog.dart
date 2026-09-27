@@ -102,7 +102,9 @@ class _AiSettingsDialogState extends State<_AiSettingsDialog> {
   Widget build(BuildContext context) => AlertDialog(
     title: Text(widget.profile == null ? '添加 API' : '编辑 API'),
     content: SizedBox(
-      width: 440,
+      width: (MediaQuery.sizeOf(context).width - 128)
+          .clamp(120.0, 440.0)
+          .toDouble(),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -281,7 +283,9 @@ class _AiPromptSettingsDialogState extends State<_AiPromptSettingsDialog> {
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('AI 提示词'),
     content: SizedBox(
-      width: 440,
+      width: (MediaQuery.sizeOf(context).width - 128)
+          .clamp(120.0, 440.0)
+          .toDouble(),
       child: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
@@ -497,28 +501,13 @@ class _AiPromptTemplateDialogState extends State<_AiPromptTemplateDialog> {
     super.dispose();
   }
 
-  Widget _promptField(
-    String label,
-    String key,
-    TextEditingController controller,
-  ) => TextField(
-    key: ValueKey(key),
-    controller: controller,
-    minLines: 2,
-    maxLines: 5,
-    maxLength: 4000,
-    decoration: InputDecoration(
-      labelText: label,
-      hintText: '留空使用内置提示词',
-      border: const OutlineInputBorder(),
-    ),
-  );
-
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: Text(widget.template == null ? '新建文风模板' : '编辑文风模板'),
     content: SizedBox(
-      width: 460,
+      width: (MediaQuery.sizeOf(context).width - 128)
+          .clamp(120.0, 460.0)
+          .toDouble(),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -543,17 +532,6 @@ class _AiPromptTemplateDialogState extends State<_AiPromptTemplateDialog> {
                 border: OutlineInputBorder(),
               ),
             ),
-            ExpansionTile(
-              key: const ValueKey('ai-template-advanced'),
-              tilePadding: EdgeInsets.zero,
-              title: const Text('分操作提示词'),
-              children: [
-                _promptField('润色', 'ai-template-polish', _polish),
-                _promptField('续写', 'ai-template-continue', _continueWriting),
-                _promptField('改写', 'ai-template-rewrite', _rewrite),
-                _promptField('自定义', 'ai-template-custom', _custom),
-              ],
-            ),
             if (_error != null)
               Text(
                 _error!,
@@ -570,6 +548,182 @@ class _AiPromptTemplateDialogState extends State<_AiPromptTemplateDialog> {
       ),
       FilledButton(
         key: const ValueKey('save-ai-template'),
+        onPressed: _saving ? null : _save,
+        child: const Text('保存'),
+      ),
+    ],
+  );
+}
+
+Future<void> showAiOperationPromptDialog(
+  BuildContext context,
+  AiSettingsStore store, {
+  AiOperationPrompt? prompt,
+}) => showDialog<void>(
+  context: context,
+  builder: (context) => _AiOperationPromptDialog(store: store, prompt: prompt),
+);
+
+class _AiOperationPromptDialog extends StatefulWidget {
+  const _AiOperationPromptDialog({required this.store, this.prompt});
+
+  final AiSettingsStore store;
+  final AiOperationPrompt? prompt;
+
+  @override
+  State<_AiOperationPromptDialog> createState() =>
+      _AiOperationPromptDialogState();
+}
+
+class _AiOperationPromptDialogState extends State<_AiOperationPromptDialog> {
+  final _name = TextEditingController();
+  final _content = TextEditingController();
+  AiTextAction _action = AiTextAction.polish;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _name.text = widget.prompt?.name ?? '';
+    _content.text = widget.prompt?.content ?? '';
+    _action = widget.prompt?.action ?? AiTextAction.polish;
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _content.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _name.text.trim();
+    final content = _content.text.trim();
+    if (name.isEmpty || content.isEmpty) {
+      setState(() => _error = '请填写名称和提示词内容');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final catalog = await widget.store.loadOperationPromptCatalog();
+      final existing = widget.prompt;
+      if (existing != null && catalog.promptById(existing.id) == null) {
+        throw const AiRequestException('该提示词已不存在，请重新打开');
+      }
+      final prompt = AiOperationPrompt(
+        id: existing?.id ?? newEntityId('prompt'),
+        name: name,
+        action: _action,
+        content: content,
+      );
+      final defaults = Map<String, String>.of(catalog.defaultIds);
+      if (existing == null) defaults[_action.name] = prompt.id;
+      if (existing != null &&
+          existing.action != _action &&
+          defaults[existing.action.name] == existing.id) {
+        defaults.remove(existing.action.name);
+      }
+      await widget.store.saveOperationPromptCatalog(
+        AiOperationPromptCatalog(
+          customPrompts: [
+            for (final item in catalog.customPrompts)
+              if (item.id == prompt.id) prompt else item,
+            if (existing == null) prompt,
+          ],
+          builtinOverrides: [
+            for (final item in catalog.builtinOverrides)
+              if (item.id == prompt.id) prompt else item,
+            if (prompt.isBuiltin &&
+                !catalog.builtinOverrides.any((item) => item.id == prompt.id))
+              prompt,
+          ],
+          hiddenBuiltinIds: catalog.hiddenBuiltinIds,
+          defaultIds: defaults,
+        ),
+      );
+      if (mounted) Navigator.pop(context);
+    } on AiRequestException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } on Object {
+      if (mounted) setState(() => _error = '保存提示词失败');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: Text(
+      widget.prompt == null ? '新增操作提示词' : '编辑操作提示词',
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    ),
+    content: SizedBox(
+      width: (MediaQuery.sizeOf(context).width - 128)
+          .clamp(120.0, 460.0)
+          .toDouble(),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const ValueKey('ai-operation-name'),
+              controller: _name,
+              maxLength: 40,
+              decoration: const InputDecoration(labelText: '名称'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<AiTextAction>(
+              key: const ValueKey('ai-operation-action'),
+              initialValue: _action,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: '适用操作'),
+              items: [
+                for (final action in AiTextAction.values)
+                  DropdownMenuItem(
+                    value: action,
+                    child: Text(aiActionLabel(action)),
+                  ),
+              ],
+              onChanged: widget.prompt?.isBuiltin == true
+                  ? null
+                  : (action) {
+                      if (action != null) setState(() => _action = action);
+                    },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('ai-operation-content'),
+              controller: _content,
+              minLines: 5,
+              maxLines: 10,
+              maxLength: 4000,
+              decoration: const InputDecoration(
+                labelText: '提示词内容',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            if (_error != null)
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.pop(context),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        key: const ValueKey('save-ai-operation'),
         onPressed: _saving ? null : _save,
         child: const Text('保存'),
       ),

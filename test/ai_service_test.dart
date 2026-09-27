@@ -167,6 +167,48 @@ void main() {
     );
   });
 
+  test('四种默认操作提示词独立于文风，并迁移旧版自定义提示词', () async {
+    final storage = _MemorySecureStorage({'ai.prompt.polish': '旧润色词'});
+    final store = SecureAiSettingsStore(storage: storage);
+    final migrated = await store.loadOperationPromptCatalog();
+    expect(migrated.defaultFor(AiTextAction.polish).content, '旧润色词');
+    await store.savePromptCatalog(const AiPromptCatalog());
+    expect(
+      (await store.loadOperationPromptCatalog())
+          .defaultFor(AiTextAction.polish)
+          .content,
+      '旧润色词',
+    );
+    expect(
+      migrated.defaultFor(AiTextAction.rewrite).content,
+      defaultAiPrompt(AiTextAction.rewrite),
+    );
+    expect(builtinAiOperationPrompts.length, 4);
+    await store.saveOperationPromptCatalog(
+      AiOperationPromptCatalog(
+        customPrompts: migrated.customPrompts,
+        builtinOverrides: const [
+          AiOperationPrompt(
+            id: 'builtin-operation-rewrite',
+            name: '重写事实',
+            action: AiTextAction.rewrite,
+            content: '保留事实，只改句式',
+          ),
+        ],
+        defaultIds: migrated.defaultIds,
+      ),
+    );
+    final loaded = await store.loadOperationPromptCatalog();
+    expect(loaded.defaultFor(AiTextAction.rewrite).content, '保留事实，只改句式');
+    expect(loaded.defaultFor(AiTextAction.polish).content, '旧润色词');
+    expect(
+      () => AiOperationPromptCatalog.decode(
+        '{"version":1,"customPrompts":[],"builtinOverrides":[],"hiddenBuiltinIds":["builtin-operation-polish"],"defaultIds":{}}',
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('仅发送选区至 Chat Completions 兼容接口', () async {
     final transport = _FakeTransport();
     final service = AiTextService(transport: transport);

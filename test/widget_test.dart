@@ -67,6 +67,7 @@ class MemoryAiSettingsStore implements AiSettingsStore {
   AiConfiguration value;
   AiProviderCatalog catalog = const AiProviderCatalog();
   AiPromptCatalog promptCatalog = const AiPromptCatalog();
+  AiOperationPromptCatalog? operationCatalog;
 
   @override
   Future<AiConfiguration> load() async => value;
@@ -141,6 +142,47 @@ class MemoryAiSettingsStore implements AiSettingsStore {
           ? ''
           : template.promptFor(AiTextAction.custom),
     );
+  }
+
+  @override
+  Future<AiOperationPromptCatalog> loadOperationPromptCatalog() async {
+    if (operationCatalog != null) return operationCatalog!;
+    final migrated = <AiOperationPrompt>[];
+    final defaults = <String, String>{};
+    for (final template in promptCatalog.templates) {
+      for (final action in AiTextAction.values) {
+        final content = switch (action) {
+          AiTextAction.polish => template.polishPrompt,
+          AiTextAction.continueWriting => template.continueWritingPrompt,
+          AiTextAction.rewrite => template.rewritePrompt,
+          AiTextAction.custom => template.customPrompt,
+        };
+        if (content.isEmpty) continue;
+        final id = 'migrated-${template.id}-${action.name}';
+        migrated.add(
+          AiOperationPrompt(
+            id: id,
+            name: '${template.name} · ${aiActionLabel(action)}',
+            action: action,
+            content: content,
+          ),
+        );
+        if (template.id == promptCatalog.defaultTemplateId) {
+          defaults[action.name] = id;
+        }
+      }
+    }
+    return AiOperationPromptCatalog(
+      customPrompts: migrated,
+      defaultIds: defaults,
+    );
+  }
+
+  @override
+  Future<void> saveOperationPromptCatalog(
+    AiOperationPromptCatalog catalog,
+  ) async {
+    operationCatalog = catalog;
   }
 }
 
@@ -756,6 +798,73 @@ void main() {
     expect(find.text('我的书架'), findsOneWidget);
   });
 
+  testWidgets('从正文右上角进入设置，返回后保留章节与滚动位置', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final chapter = data.books.first.chapters.first;
+    chapter.body = List.generate(
+      90,
+      (index) => '第 $index 段：这是用于验证返回位置的正文。',
+    ).join('\n');
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.openChapter(chapter.id);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final body = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.scrollController != null,
+    );
+    final scroll = tester.widget<TextField>(body).scrollController!;
+    expect(scroll.hasClients, isTrue);
+    scroll.jumpTo(360);
+    await tester.pumpAndSettle();
+    expect(scroll.offset, greaterThan(300));
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.settings);
+    expect(controller.canGoBack, isTrue);
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.writing);
+    expect(controller.activeChapter?.id, chapter.id);
+    expect(
+      tester.widget<TextField>(body).scrollController!.offset,
+      greaterThan(300),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('设定页打开设置再返回仍停留在世界观标签', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.characters);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('世界观').first);
+    await tester.pumpAndSettle();
+    expect(find.text('新建世界观条目'), findsOneWidget);
+    await tester.tap(find.byTooltip('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.characters);
+    expect(find.text('新建世界观条目'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('书内胶囊随纵向滚动收起和出现', (tester) async {
     tester.view.physicalSize = const Size(412, 500);
     tester.view.devicePixelRatio = 1;
@@ -841,6 +950,32 @@ void main() {
     await tester.tap(find.text('大纲'));
     await tester.pumpAndSettle();
     expect(find.text('消失的第七封信'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('窄屏长角色名与事件表单不越界', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    data.books.first.roles.first.name = '江边旧城档案馆特别调查组的记录员';
+    data.books.first.tracks.first.name = '很长很长的故事主时间线名称';
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.navigateBook(WorkspacePage.timeline);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('新建事件').first);
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(tester.getRect(dialog).right, lessThanOrEqualTo(320));
+    final chip = find.byKey(const ValueKey('event-role-role-1'));
+    await tester.ensureVisible(chip);
+    expect(
+      tester.getRect(chip).right,
+      lessThanOrEqualTo(tester.getRect(dialog).right - 8),
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -1297,7 +1432,7 @@ void main() {
     ).firstMatch(pubspec)!;
     expect(
       find.text(
-        '${version.group(1)!.replaceFirst('-ai.dev', '.ai.dev')} (${version.group(2)})',
+        '${version.group(1)!.replaceFirst('-ai-dev.', '.ai-dev.')} (${version.group(2)})',
       ),
       findsOneWidget,
     );
@@ -1565,6 +1700,73 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('操作提示词可独立新增与编辑内置内容', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final settings = MemoryAiSettingsStore(const AiConfiguration());
+    final controller = AppController(
+      store: MemoryStore(data),
+      data: data,
+      aiSettingsStore: settings,
+      aiHistoryStore: MemoryAiHistoryStore(),
+    )..navigate(WorkspacePage.aiSettings);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('ai-operation-builtin-operation-polish')),
+      findsOneWidget,
+    );
+    final add = find.byKey(const ValueKey('add-ai-operation'));
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-operation-name')),
+      '简洁润色',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-operation-content')),
+      '只润色句式，不改变事实。',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-operation')));
+    await tester.pumpAndSettle();
+    expect(settings.operationCatalog!.customPrompts.single.name, '简洁润色');
+    expect(
+      settings.operationCatalog!.defaultFor(AiTextAction.polish).content,
+      '只润色句式，不改变事实。',
+    );
+
+    final builtin = find.byKey(
+      const ValueKey('ai-operation-builtin-operation-polish'),
+    );
+    await tester.ensureVisible(builtin);
+    await tester.tap(
+      find.descendant(
+        of: builtin,
+        matching: find.byType(PopupMenuButton<String>),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('ai-operation-content')),
+      '修改后的内置润色词',
+    );
+    await tester.tap(find.byKey(const ValueKey('save-ai-operation')));
+    await tester.pumpAndSettle();
+    expect(
+      settings.operationCatalog!.builtinOverrides.single.content,
+      '修改后的内置润色词',
+    );
+    expect(data.toJson().toString(), isNot(contains('修改后的内置润色词')));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('AI 设置显示累计次数、历史结果与保留条数', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;
@@ -1593,6 +1795,12 @@ void main() {
     )..navigate(WorkspacePage.aiSettings);
     await tester.pumpWidget(YejianApp(controller: controller));
     await tester.pumpAndSettle();
+    expect(find.text('累计生成次数'), findsNothing);
+    final entry = find.byKey(const ValueKey('open-ai-history'));
+    await tester.ensureVisible(entry);
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.aiHistory);
     final retention = find.byKey(const ValueKey('ai-history-retention'));
     await tester.ensureVisible(retention);
     expect(find.text('累计生成次数'), findsOneWidget);
@@ -1760,7 +1968,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 900));
   });
 
-  testWidgets('正文 AI 请求可单次切换模型与文风，结果记入历史', (tester) async {
+  testWidgets('正文 AI 请求可单次切换模型、文风与提示词，结果记入历史', (tester) async {
     tester.view.physicalSize = const Size(412, 915);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -1782,6 +1990,18 @@ void main() {
           ),
         ],
         activeId: 'initial',
+      ),
+    );
+    await settings.saveOperationPromptCatalog(
+      const AiOperationPromptCatalog(
+        customPrompts: [
+          AiOperationPrompt(
+            id: 'custom-polish',
+            name: '测试润色词',
+            action: AiTextAction.polish,
+            content: '按测试要求润色',
+          ),
+        ],
       ),
     );
     final history = MemoryAiHistoryStore();
@@ -1808,11 +2028,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('简洁克制').last);
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('ai-operation-select')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('测试润色词').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('ai-send')));
     await tester.pumpAndSettle();
 
     expect(transport.sentModel, 'second-model');
     expect(transport.sentPrompt, contains('句子凝练'));
+    expect(transport.sentPrompt, contains('按测试要求润色'));
     expect(history.value.totalCount, 1);
     expect(history.value.records.single.model, 'second-model');
     expect(history.value.records.single.templateName, '简洁克制');
@@ -1868,6 +2093,11 @@ void main() {
           )
           .first,
     );
+    await Scrollable.ensureVisible(
+      tester.element(find.byKey(const ValueKey('ai-include-context'))),
+      alignment: 0.5,
+    );
+    await tester.pumpAndSettle();
     expect(find.text('附带本书相关资料'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('ai-include-context')));
     await tester.pumpAndSettle();

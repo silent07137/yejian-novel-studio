@@ -49,9 +49,8 @@ android {
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
-        // Pub requires SemVer; the experimental Android build displays the
-        // user-facing 0.4.0.ai.dev label without changing normal beta names.
-        versionName = flutter.versionName.replace("-ai.dev", ".ai.dev")
+        // Pub requires SemVer; keep the user-facing AI test version format.
+        versionName = flutter.versionName.replace("-ai-dev.", ".ai-dev.")
     }
 
     signingConfigs {

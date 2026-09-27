@@ -27,6 +27,7 @@ enum WorkspacePage {
   settings,
   appSettings,
   aiSettings,
+  aiHistory,
   about,
   profile,
 }
@@ -66,6 +67,8 @@ class AppController extends ChangeNotifier {
   Timer? _saveTimer;
   bool _disposed = false;
   final List<WorkspacePage> _pageHistory = [];
+  final Map<String, double> _editorScrollOffsets = {};
+  final Map<String, int> _pageSelections = {};
 
   Book? get activeBook {
     for (final book in data.books) {
@@ -93,6 +96,7 @@ class AppController extends ChangeNotifier {
     WorkspacePage.settings => '设置',
     WorkspacePage.appSettings => '应用设置',
     WorkspacePage.aiSettings => 'AI 助手',
+    WorkspacePage.aiHistory => '生成历史',
     WorkspacePage.about => '关于应用',
     WorkspacePage.profile => '个人中心',
   };
@@ -119,13 +123,28 @@ class AppController extends ChangeNotifier {
     WorkspacePage.settings ||
     WorkspacePage.appSettings ||
     WorkspacePage.aiSettings ||
+    WorkspacePage.aiHistory ||
     WorkspacePage.about ||
     WorkspacePage.profile => true,
     _ => false,
   };
 
   bool get canGoBack =>
-      page != WorkspacePage.home && page != WorkspacePage.settings;
+      _pageHistory.isNotEmpty ||
+      (page != WorkspacePage.home && page != WorkspacePage.settings);
+
+  double editorScrollOffset(String chapterId) =>
+      _editorScrollOffsets[chapterId] ?? 0;
+
+  void saveEditorScrollOffset(String chapterId, double offset) {
+    _editorScrollOffsets[chapterId] = offset;
+  }
+
+  int pageSelection(String key) => _pageSelections[key] ?? 0;
+
+  void savePageSelection(String key, int value) {
+    _pageSelections[key] = value;
+  }
 
   void navigate(WorkspacePage value) {
     if (page == value) return;
@@ -149,6 +168,11 @@ class AppController extends ChangeNotifier {
   }
 
   void goBack() {
+    if (_pageHistory.isNotEmpty) {
+      page = _pageHistory.removeLast();
+      notifyListeners();
+      return;
+    }
     if (isBookWorkspace) {
       _pageHistory.clear();
       page = WorkspacePage.bookOverview;
@@ -157,6 +181,7 @@ class AppController extends ChangeNotifier {
     }
     if (page == WorkspacePage.appSettings ||
         page == WorkspacePage.aiSettings ||
+        page == WorkspacePage.aiHistory ||
         page == WorkspacePage.about ||
         page == WorkspacePage.profile) {
       page = _pageHistory.isEmpty

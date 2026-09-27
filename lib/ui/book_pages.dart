@@ -18,6 +18,14 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
   var _tab = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _tab = widget.controller
+        .pageSelection('book-settings-${widget.controller.activeBook?.id}')
+        .clamp(0, 1);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final book = widget.controller.activeBook;
     if (book == null) return const Center(child: Text('请先从书架打开一本书。'));
@@ -48,13 +56,20 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
         ),
         Expanded(
           child: _PageScroller(
+            storageId: 'book-settings-${book.id}-$_tab',
             topPadding: 12,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _SettingsTypeTabs(
                   value: _tab,
-                  onChanged: (value) => setState(() => _tab = value),
+                  onChanged: (value) => setState(() {
+                    _tab = value;
+                    widget.controller.savePageSelection(
+                      'book-settings-${book.id}',
+                      value,
+                    );
+                  }),
                 ),
                 const SizedBox(height: 14),
                 _TemplateBanner(
@@ -703,6 +718,17 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
   @override
   void initState() {
     super.initState();
+    final bookId = _book?.id;
+    if (bookId != null) {
+      _tool =
+          _PlotTool.values[widget.controller
+              .pageSelection('story-tool-$bookId')
+              .clamp(0, _PlotTool.values.length - 1)];
+      _view =
+          _StoryView.values[widget.controller
+              .pageSelection('story-view-$bookId')
+              .clamp(0, _StoryView.values.length - 1)];
+    }
     _graphController.addListener(_handleGraphTransform);
     _selectedTracks.addAll(
       (_book?.tracks ?? const <StoryTrack>[]).take(2).map((track) => track.id),
@@ -748,6 +774,7 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
           child: compact && _tool == _PlotTool.structure
               ? _buildMobileStructure(context, book)
               : _PageScroller(
+                  storageId: 'story-${book.id}-${_tool.name}-${_view.name}',
                   maxWidth: 1180,
                   topPadding: 12,
                   child: Column(
@@ -779,7 +806,10 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
   Widget _buildPlotToolTabs() => _ChoiceStrip(
     labels: const ['结构', '大纲', '伏笔', '灵感'],
     selectedIndex: _tool.index,
-    onSelected: (index) => setState(() => _tool = _PlotTool.values[index]),
+    onSelected: (index) => setState(() {
+      _tool = _PlotTool.values[index];
+      widget.controller.savePageSelection('story-tool-${_book?.id}', index);
+    }),
   );
 
   Widget _buildMobileStructure(BuildContext context, Book book) {
@@ -798,6 +828,10 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
             value: _view,
             onChanged: (value) {
               setState(() => _view = value);
+              widget.controller.savePageSelection(
+                'story-view-${book.id}',
+                value.index,
+              );
               _resetStoryViewport();
             },
           ),
@@ -1114,7 +1148,13 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
       children: [
         _MobileStoryTabs(
           value: _view,
-          onChanged: (value) => setState(() => _view = value),
+          onChanged: (value) => setState(() {
+            _view = value;
+            widget.controller.savePageSelection(
+              'story-view-${book.id}',
+              value.index,
+            );
+          }),
         ),
         const SizedBox(height: 16),
         Wrap(
@@ -1449,17 +1489,31 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: Text(existing == null ? '新建故事事件' : '编辑故事事件'),
+          title: Text(
+            existing == null ? '新建故事事件' : '编辑故事事件',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
           content: SingleChildScrollView(
             child: SizedBox(
-              width: 460,
+              width: (MediaQuery.sizeOf(context).width - 128)
+                  .clamp(120.0, 460.0)
+                  .toDouble(),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '事件名称',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
                   TextField(
                     controller: title,
                     autofocus: true,
-                    decoration: const InputDecoration(labelText: '事件名称'),
+                    decoration: const InputDecoration(hintText: '请输入事件名称'),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -1581,7 +1635,19 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                                   child: Text(role.name.characters.first),
                                 ),
                                 selected: selectedRoles.contains(role.id),
-                                label: Text(role.name),
+                                label: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        (MediaQuery.sizeOf(context).width - 228)
+                                            .clamp(100.0, 360.0)
+                                            .toDouble(),
+                                  ),
+                                  child: Text(
+                                    role.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                                 onSelected: (value) => setDialogState(() {
                                   value
                                       ? selectedRoles.add(role.id)
@@ -1610,7 +1676,19 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
                           .map(
                             (track) => FilterChip(
                               selected: selected.contains(track.id),
-                              label: Text(track.name),
+                              label: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth:
+                                      (MediaQuery.sizeOf(context).width - 188)
+                                          .clamp(120.0, 400.0)
+                                          .toDouble(),
+                                ),
+                                child: Text(
+                                  track.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
                               onSelected: (value) => setDialogState(() {
                                 value
                                     ? selected.add(track.id)
@@ -2062,6 +2140,7 @@ class _MobileTimelineCanvas extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
             ),
             child: SingleChildScrollView(
+              key: PageStorageKey('timeline-${book.id}'),
               controller: controller,
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
@@ -3295,17 +3374,20 @@ class _PageScroller extends StatelessWidget {
     required this.child,
     this.maxWidth = 1040,
     this.topPadding,
+    this.storageId,
   });
 
   final Widget child;
   final double maxWidth;
   final double? topPadding;
+  final String? storageId;
 
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return SingleChildScrollView(
+      key: storageId == null ? null : PageStorageKey(storageId),
       padding: EdgeInsets.fromLTRB(
         compact ? 16 : 28,
         topPadding ?? (compact ? 16 : 28),

@@ -77,19 +77,19 @@ jobs:
           apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           "$apksigner_path" verify --verbose build/app/outputs/flutter-apk/app-release.apk
           aapt_path="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -n 1)"
-          "$aapt_path" dump badging build/app/outputs/flutter-apk/app-release.apk | grep "versionName='0.4.0.ai.dev'"
+          "$aapt_path" dump badging build/app/outputs/flutter-apk/app-release.apk | grep "versionName='0.4.0.ai-dev.30'"
 
       - name: Prepare test artifact
         shell: bash
         run: |
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk dist/yejian-0.4.0.ai.dev-android-test.apk
-          (cd dist && sha256sum yejian-0.4.0.ai.dev-android-test.apk > yejian-0.4.0.ai.dev-android-test.apk.sha256)
+          cp build/app/outputs/flutter-apk/app-release.apk dist/yejian-0.4.0.ai-dev.30-android-test.apk
+          (cd dist && sha256sum yejian-0.4.0.ai-dev.30-android-test.apk > yejian-0.4.0.ai-dev.30-android-test.apk.sha256)
 
       - name: Upload signed APK without publishing a release
         uses: actions/upload-artifact@v4
         with:
-          name: yejian-0.4.0.ai.dev-android-test
+          name: yejian-0.4.0.ai-dev.30-android-test
           path: |
             dist/*.apk
             dist/*.sha256

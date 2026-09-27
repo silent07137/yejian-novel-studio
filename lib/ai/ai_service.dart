@@ -357,6 +357,179 @@ class AiPromptCatalog {
   }
 }
 
+String aiActionLabel(AiTextAction action) => switch (action) {
+  AiTextAction.polish => '润色',
+  AiTextAction.continueWriting => '续写',
+  AiTextAction.rewrite => '改写',
+  AiTextAction.custom => '自定义',
+};
+
+class AiOperationPrompt {
+  const AiOperationPrompt({
+    required this.id,
+    required this.name,
+    required this.action,
+    required this.content,
+  });
+
+  final String id;
+  final String name;
+  final AiTextAction action;
+  final String content;
+
+  bool get isBuiltin => id.startsWith('builtin-operation-');
+
+  Map<String, String> toJson() => {
+    'id': id,
+    'name': name,
+    'action': action.name,
+    'content': content,
+  };
+
+  factory AiOperationPrompt.fromJson(Map<String, dynamic> json) {
+    String field(String key) {
+      final value = json[key];
+      if (value is! String) throw const FormatException('操作提示词格式错误');
+      return value;
+    }
+
+    final actionName = field('action');
+    final action = AiTextAction.values
+        .where((item) => item.name == actionName)
+        .firstOrNull;
+    if (action == null) throw const FormatException('操作提示词格式错误');
+    return AiOperationPrompt(
+      id: field('id'),
+      name: field('name'),
+      action: action,
+      content: field('content'),
+    );
+  }
+}
+
+final builtinAiOperationPrompts = [
+  for (final action in AiTextAction.values)
+    AiOperationPrompt(
+      id: 'builtin-operation-${action.name}',
+      name: aiActionLabel(action),
+      action: action,
+      content: defaultAiPrompt(action),
+    ),
+];
+
+class AiOperationPromptCatalog {
+  const AiOperationPromptCatalog({
+    this.customPrompts = const [],
+    this.builtinOverrides = const [],
+    this.hiddenBuiltinIds = const [],
+    this.defaultIds = const {},
+  });
+
+  final List<AiOperationPrompt> customPrompts;
+  final List<AiOperationPrompt> builtinOverrides;
+  final List<String> hiddenBuiltinIds;
+  final Map<String, String> defaultIds;
+
+  List<AiOperationPrompt> get prompts => [
+    for (final builtin in builtinAiOperationPrompts)
+      if (!hiddenBuiltinIds.contains(builtin.id))
+        builtinOverrides.where((item) => item.id == builtin.id).firstOrNull ??
+            builtin,
+    ...customPrompts,
+  ];
+
+  List<AiOperationPrompt> forAction(AiTextAction action) =>
+      prompts.where((item) => item.action == action).toList();
+
+  AiOperationPrompt? promptById(String? id) =>
+      prompts.where((item) => item.id == id).firstOrNull;
+
+  AiOperationPrompt defaultFor(AiTextAction action) =>
+      forAction(action)
+          .where((item) => item.id == defaultIds[action.name])
+          .firstOrNull ??
+      forAction(action).first;
+
+  String encode() => jsonEncode({
+    'version': 1,
+    'customPrompts': customPrompts.map((item) => item.toJson()).toList(),
+    'builtinOverrides': builtinOverrides.map((item) => item.toJson()).toList(),
+    'hiddenBuiltinIds': hiddenBuiltinIds,
+    'defaultIds': defaultIds,
+  });
+
+  factory AiOperationPromptCatalog.decode(String source) {
+    final data = jsonDecode(source);
+    if (data is! Map<String, dynamic> ||
+        data['version'] != 1 ||
+        data['customPrompts'] is! List ||
+        data['builtinOverrides'] is! List ||
+        data['hiddenBuiltinIds'] is! List ||
+        data['defaultIds'] is! Map<String, dynamic>) {
+      throw const FormatException('操作提示词格式错误');
+    }
+    List<AiOperationPrompt> parse(List raw) => raw.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('操作提示词格式错误');
+      }
+      return AiOperationPrompt.fromJson(item);
+    }).toList();
+    final hidden = data['hiddenBuiltinIds'] as List;
+    final defaults = data['defaultIds'] as Map<String, dynamic>;
+    if (hidden.any((item) => item is! String) ||
+        defaults.values.any((item) => item is! String)) {
+      throw const FormatException('操作提示词格式错误');
+    }
+    final catalog = AiOperationPromptCatalog(
+      customPrompts: parse(data['customPrompts'] as List),
+      builtinOverrides: parse(data['builtinOverrides'] as List),
+      hiddenBuiltinIds: hidden.cast<String>(),
+      defaultIds: defaults.cast<String, String>(),
+    );
+    final ids = catalog.prompts.map((item) => item.id).toList();
+    if (ids.toSet().length != ids.length ||
+        catalog.builtinOverrides.map((item) => item.id).toSet().length !=
+            catalog.builtinOverrides.length ||
+        catalog.hiddenBuiltinIds.toSet().length !=
+            catalog.hiddenBuiltinIds.length ||
+        catalog.defaultIds.keys.any(
+          (name) => !AiTextAction.values.any((action) => action.name == name),
+        ) ||
+        catalog.customPrompts.any(
+          (item) =>
+              item.id.isEmpty ||
+              item.isBuiltin ||
+              item.name.trim().isEmpty ||
+              item.content.trim().isEmpty,
+        ) ||
+        catalog.builtinOverrides.any(
+          (item) =>
+              item.name.trim().isEmpty ||
+              item.content.trim().isEmpty ||
+              !builtinAiOperationPrompts.any(
+                (builtin) =>
+                    builtin.id == item.id && builtin.action == item.action,
+              ),
+        ) ||
+        catalog.hiddenBuiltinIds.any(
+          (id) => !builtinAiOperationPrompts.any((item) => item.id == id),
+        ) ||
+        AiTextAction.values.any(
+          (action) =>
+              catalog.forAction(action).isEmpty ||
+              (catalog.defaultIds[action.name] != null &&
+                  !catalog
+                      .forAction(action)
+                      .any(
+                        (item) => item.id == catalog.defaultIds[action.name],
+                      )),
+        )) {
+      throw const FormatException('操作提示词格式错误');
+    }
+    return catalog;
+  }
+}
+
 abstract interface class AiSettingsStore {
   Future<AiConfiguration> load();
 
@@ -366,6 +539,8 @@ abstract interface class AiSettingsStore {
   Future<void> saveProviders(AiProviderCatalog value);
   Future<AiPromptCatalog> loadPromptCatalog();
   Future<void> savePromptCatalog(AiPromptCatalog value);
+  Future<AiOperationPromptCatalog> loadOperationPromptCatalog();
+  Future<void> saveOperationPromptCatalog(AiOperationPromptCatalog value);
 }
 
 /// AI credentials are deliberately kept outside the book database and archives.
@@ -384,6 +559,7 @@ class SecureAiSettingsStore implements AiSettingsStore {
   static const _customPromptKey = 'ai.prompt.custom';
   static const _providersKey = 'ai.providers.v1';
   static const _promptCatalogKey = 'ai.prompt_templates.v1';
+  static const _operationPromptsKey = 'ai.operation_prompts.v1';
 
   @override
   Future<AiProviderCatalog> loadProviders() async {
@@ -458,6 +634,50 @@ class SecureAiSettingsStore implements AiSettingsStore {
     await _storage.write(key: _continueWritingPromptKey, value: null);
     await _storage.write(key: _rewritePromptKey, value: null);
     await _storage.write(key: _customPromptKey, value: null);
+  }
+
+  @override
+  Future<AiOperationPromptCatalog> loadOperationPromptCatalog() async {
+    final stored = await _storage.read(key: _operationPromptsKey);
+    if (stored != null) return AiOperationPromptCatalog.decode(stored);
+    final styles = await loadPromptCatalog();
+    final migrated = <AiOperationPrompt>[];
+    final defaults = <String, String>{};
+    for (final style in styles.templates) {
+      for (final action in AiTextAction.values) {
+        final content = switch (action) {
+          AiTextAction.polish => style.polishPrompt,
+          AiTextAction.continueWriting => style.continueWritingPrompt,
+          AiTextAction.rewrite => style.rewritePrompt,
+          AiTextAction.custom => style.customPrompt,
+        };
+        if (content.trim().isEmpty) continue;
+        final id = 'migrated-${style.id}-${action.name}';
+        migrated.add(
+          AiOperationPrompt(
+            id: id,
+            name: '${style.name} · ${aiActionLabel(action)}',
+            action: action,
+            content: content.trim(),
+          ),
+        );
+        if (style.id == styles.defaultTemplateId) defaults[action.name] = id;
+      }
+    }
+    final catalog = AiOperationPromptCatalog(
+      customPrompts: migrated,
+      defaultIds: defaults,
+    );
+    await saveOperationPromptCatalog(catalog);
+    return catalog;
+  }
+
+  @override
+  Future<void> saveOperationPromptCatalog(
+    AiOperationPromptCatalog value,
+  ) async {
+    AiOperationPromptCatalog.decode(value.encode());
+    await _storage.write(key: _operationPromptsKey, value: value.encode());
   }
 
   @override

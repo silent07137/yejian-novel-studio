@@ -46,8 +46,10 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
   bool _busy = false;
   AiProviderCatalog? _providers;
   AiPromptCatalog? _templates;
+  AiOperationPromptCatalog? _operationPrompts;
   String? _providerId;
   String? _templateId;
+  String? _operationPromptId;
   String? _generated;
   String? _error;
   final _instruction = TextEditingController();
@@ -66,16 +68,25 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
       final providers = await widget.controller.aiSettingsStore.loadProviders();
       final templates = await widget.controller.aiSettingsStore
           .loadPromptCatalog();
+      final operations = await widget.controller.aiSettingsStore
+          .loadOperationPromptCatalog();
       if (mounted) {
         setState(() {
           _providers = providers;
           _templates = templates;
+          _operationPrompts = operations;
           _providerId = providers.profiles.any((item) => item.id == _providerId)
               ? _providerId
               : providers.activeId;
           _templateId = templates.templateById(_templateId) != null
               ? _templateId
               : templates.defaultTemplateId;
+          _operationPromptId =
+              operations
+                  .forAction(_action)
+                  .any((item) => item.id == _operationPromptId)
+              ? _operationPromptId
+              : operations.defaultFor(_action).id;
         });
       }
     } on Object {
@@ -88,15 +99,25 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
         .where((item) => item.id == _providerId)
         .firstOrNull;
     final template = _templates?.templateById(_templateId);
-    if (profile == null || template == null) return null;
+    final prompt = _operationPrompts
+        ?.forAction(_action)
+        .where((item) => item.id == _operationPromptId)
+        .firstOrNull;
+    if (profile == null || template == null || prompt == null) return null;
+    final style = template.styleInstruction.trim();
+    final instruction = style.isEmpty
+        ? prompt.content
+        : '${prompt.content}\n文风要求：$style';
     return AiConfiguration(
       baseUrl: profile.baseUrl,
       model: profile.model,
       apiKey: profile.apiKey,
-      polishPrompt: template.promptFor(AiTextAction.polish),
-      continueWritingPrompt: template.promptFor(AiTextAction.continueWriting),
-      rewritePrompt: template.promptFor(AiTextAction.rewrite),
-      customPrompt: template.promptFor(AiTextAction.custom),
+      polishPrompt: _action == AiTextAction.polish ? instruction : '',
+      continueWritingPrompt: _action == AiTextAction.continueWriting
+          ? instruction
+          : '',
+      rewritePrompt: _action == AiTextAction.rewrite ? instruction : '',
+      customPrompt: _action == AiTextAction.custom ? instruction : '',
     );
   }
 
@@ -244,54 +265,138 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   children: [
                     if (generated == null) ...[
-                      InputDecorator(
-                        decoration: const InputDecoration(labelText: '模型配置'),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            key: const ValueKey('ai-model-select'),
-                            value: _providerId,
-                            isExpanded: true,
-                            hint: const Text('先添加 API'),
-                            items: [
-                              for (final profile
-                                  in _providers?.profiles ??
-                                      <AiProviderProfile>[])
-                                DropdownMenuItem(
-                                  value: profile.id,
-                                  child: Text(
-                                    '${profile.name} · ${profile.model}',
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                            ],
-                            onChanged: _busy
-                                ? null
-                                : (id) => setState(() => _providerId = id),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '模型配置',
+                            style: Theme.of(context).textTheme.labelLarge,
                           ),
-                        ),
+                          const SizedBox(height: 6),
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                key: const ValueKey('ai-model-select'),
+                                value: _providerId,
+                                isExpanded: true,
+                                hint: const Text('先添加 API'),
+                                items: [
+                                  for (final profile
+                                      in _providers?.profiles ??
+                                          <AiProviderProfile>[])
+                                    DropdownMenuItem(
+                                      value: profile.id,
+                                      child: Text(
+                                        '${profile.name} · ${profile.model}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                ],
+                                onChanged: _busy
+                                    ? null
+                                    : (id) => setState(() => _providerId = id),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 12),
-                      InputDecorator(
-                        decoration: const InputDecoration(labelText: '文风模板'),
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            key: const ValueKey('ai-template-select'),
-                            value: _templateId,
-                            isExpanded: true,
-                            items: [
-                              for (final template
-                                  in _templates?.templates ??
-                                      <AiPromptTemplate>[])
-                                DropdownMenuItem(
-                                  value: template.id,
-                                  child: Text(template.name),
-                                ),
-                            ],
-                            onChanged: _busy
-                                ? null
-                                : (id) => setState(() => _templateId = id),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '文风模板',
+                            style: Theme.of(context).textTheme.labelLarge,
                           ),
-                        ),
+                          const SizedBox(height: 6),
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                key: const ValueKey('ai-template-select'),
+                                value: _templateId,
+                                isExpanded: true,
+                                items: [
+                                  for (final template
+                                      in _templates?.templates ??
+                                          <AiPromptTemplate>[])
+                                    DropdownMenuItem(
+                                      value: template.id,
+                                      child: Text(
+                                        template.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                ],
+                                onChanged: _busy
+                                    ? null
+                                    : (id) => setState(() => _templateId = id),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '操作提示词',
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                          const SizedBox(height: 6),
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              border: OutlineInputBorder(),
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                key: const ValueKey('ai-operation-select'),
+                                value: _operationPromptId,
+                                isExpanded: true,
+                                items: [
+                                  for (final prompt
+                                      in _operationPrompts?.forAction(
+                                            _action,
+                                          ) ??
+                                          <AiOperationPrompt>[])
+                                    DropdownMenuItem(
+                                      value: prompt.id,
+                                      child: Text(
+                                        prompt.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                ],
+                                onChanged: _busy
+                                    ? null
+                                    : (id) => setState(
+                                        () => _operationPromptId = id,
+                                      ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 14),
                       Wrap(
@@ -310,6 +415,9 @@ class _AiEditorSheetState extends State<AiEditorSheet> {
                                   ? null
                                   : (_) => setState(() {
                                       _action = action;
+                                      _operationPromptId = _operationPrompts
+                                          ?.defaultFor(action)
+                                          .id;
                                       _scope = _hasSelection
                                           ? AiTextScope.selection
                                           : action ==
