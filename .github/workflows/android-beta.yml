@@ -1,7 +1,10 @@
 name: Android Beta
-run-name: Android Beta ${{ inputs.tag }}
+run-name: Android Beta ${{ inputs.tag || github.ref_name }}
 
 on:
+  push:
+    tags:
+      - 'v0.4.0-dev.*'
   workflow_dispatch:
     inputs:
       tag:
@@ -14,7 +17,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-beta-${{ inputs.tag }}
+  group: android-beta-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
       ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/yejian-release.jks
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -117,7 +120,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yejian-${{ inputs.tag }}-android
+          name: yejian-${{ inputs.tag || github.ref_name }}-android
           path: |
             dist/*.apk
             dist/*.sha256
