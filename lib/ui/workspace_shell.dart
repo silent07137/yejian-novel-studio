@@ -5172,7 +5172,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0.ai-dev.30 (30)';
+  static const _version = '0.4.0-dev.31 (31)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -5199,6 +5199,10 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.31\n'
+            '· AI 助手支持多组 API、独立文风与操作提示词、生成历史\n'
+            '· 设定长文本可放大编辑，角色卡与世界观可排序和按标签筛选\n'
+            '· 已有人物关系支持再次编辑\n\n'
             '0.4.0.ai-dev.30\n'
             '· 修复长名称和表单在窄屏下的显示\n'
             '· 生成历史移至独立页面，修复设置返回与位置重置\n'

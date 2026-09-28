@@ -16,8 +16,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-# Android displays 0.4.0.ai-dev.30; pubspec requires a SemVer prerelease separator.
-version: 0.4.0-ai-dev.30+30
+# The +31 build number also increases Android versionCode for upgrades.
+version: 0.4.0-dev.31+31
 
 environment:
   sdk: ^3.13.4

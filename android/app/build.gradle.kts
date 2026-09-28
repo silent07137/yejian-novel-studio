@@ -49,7 +49,7 @@ android {
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
-        // Pub requires SemVer; keep the user-facing AI test version format.
+        // Pub requires SemVer; preserve the user-facing AI test format when used.
         versionName = flutter.versionName.replace("-ai-dev.", ".ai-dev.")
     }
 
