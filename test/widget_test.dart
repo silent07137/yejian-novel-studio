@@ -1199,6 +1199,126 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('已有的人物关系可再次编辑并保存', (tester) async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    data.books.first.roles.first.relations.add(
+      RoleRelation(id: 'existing-relation', targetRoleId: 'role-2', name: '旧友'),
+    );
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('林照').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('编辑角色'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('能力、弱点与人物关系'));
+    await tester.tap(find.text('能力、弱点与人物关系'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byTooltip('编辑关系'),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byTooltip('编辑关系'));
+    await tester.pumpAndSettle();
+    final dialog = find.byType(AlertDialog);
+    expect(find.text('编辑人物关系'), findsOneWidget);
+    await tester.enterText(
+      find.descendant(of: dialog, matching: find.byType(TextField)).first,
+      '挚友',
+    );
+    tester.testTextInput.hide();
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: dialog, matching: find.text('保存')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    expect(controller.activeBook!.roles.first.relations.single.name, '挚友');
+    await tester.tap(find.byTooltip('编辑角色'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('能力、弱点与人物关系'));
+    await tester.tap(find.text('能力、弱点与人物关系'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('挚友 · 江迟'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('角色卡与世界观可按各自标签筛选', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('tag-filter-主角')));
+    await tester.pumpAndSettle();
+    expect(find.text('林照'), findsWidgets);
+    expect(find.text('江迟'), findsNothing);
+
+    await tester.tap(find.text('世界观').last);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('tag-filter-悬念')));
+    await tester.tap(find.byKey(const ValueKey('tag-filter-悬念')));
+    await tester.pumpAndSettle();
+    expect(find.text('灯塔书馆'), findsWidgets);
+    expect(find.text('留光'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('长按设定卡片可打开排序并更新顺序', (tester) async {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('雾灯来信').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设定').last);
+    await tester.pumpAndSettle();
+    await tester.longPress(find.text('林照').first);
+    await tester.pumpAndSettle();
+    expect(find.text('角色卡排序'), findsOneWidget);
+    final list = tester.widget<ReorderableListView>(
+      find.byType(ReorderableListView),
+    );
+    list.onReorderItem!(0, 1);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(controller.activeBook!.roles.first.name, '江迟');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('长文本可放大编辑并回填原表单', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WorldEditPage(
+          world: WorldCard(id: 'world-test', title: '测试地点'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byTooltip('放大编辑简介'));
+    await tester.tap(find.byTooltip('放大编辑简介'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('expanded-text-editor')),
+      '第一段\n第二段',
+    );
+    await tester.tap(find.text('完成'));
+    await tester.pumpAndSettle();
+    expect(find.text('第一段\n第二段'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('世界观自定义长文本可输入换行', (tester) async {
     final field = CustomFieldDefinition(
       id: 'world-longtext-test',

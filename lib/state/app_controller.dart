@@ -560,6 +560,16 @@ class AppController extends ChangeNotifier {
     _touchBook();
   }
 
+  void reorderRoles(int oldIndex, int newIndex) {
+    final book = activeBook;
+    if (book == null || oldIndex < 0 || oldIndex >= book.roles.length) return;
+    if (newIndex < 0 || newIndex >= book.roles.length || newIndex == oldIndex) {
+      return;
+    }
+    book.roles.insert(newIndex, book.roles.removeAt(oldIndex));
+    _touchBook();
+  }
+
   void deleteRole(String roleId) {
     final book = activeBook;
     if (book == null) return;
@@ -608,6 +618,18 @@ class AppController extends ChangeNotifier {
     } else {
       book.worlds[index] = world;
     }
+    _touchBook();
+  }
+
+  void reorderWorlds(int oldIndex, int newIndex) {
+    final book = activeBook;
+    if (book == null || oldIndex < 0 || oldIndex >= book.worlds.length) return;
+    if (newIndex < 0 ||
+        newIndex >= book.worlds.length ||
+        newIndex == oldIndex) {
+      return;
+    }
+    book.worlds.insert(newIndex, book.worlds.removeAt(oldIndex));
     _touchBook();
   }
 

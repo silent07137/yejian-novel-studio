@@ -320,7 +320,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
     });
   }
 
-  Future<void> _addRelation() async {
+  Future<void> _editRelation([RoleRelation? relation]) async {
     final targets = widget.allRoles
         .where((item) => item.id != widget.role.id)
         .toList();
@@ -329,16 +329,20 @@ class _RoleEditPageState extends State<RoleEditPage> {
           .showSnackBar(const SnackBar(content: Text('请先创建另一个角色')));
       return;
     }
-    var targetId = targets.first.id;
-    var direction = '单向';
-    final name = TextEditingController();
-    final description = TextEditingController();
-    final stage = TextEditingController();
+    var targetId = targets.any((item) => item.id == relation?.targetRoleId)
+        ? relation!.targetRoleId
+        : targets.first.id;
+    var direction = relation?.direction ?? '单向';
+    final name = TextEditingController(text: relation?.name ?? '');
+    final description = TextEditingController(
+      text: relation?.description ?? '',
+    );
+    final stage = TextEditingController(text: relation?.stage ?? '');
     final created = await showDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('新增人物关系'),
+          title: Text(relation == null ? '新增人物关系' : '编辑人物关系'),
           content: SizedBox(
             width: 440,
             child: SingleChildScrollView(
@@ -401,7 +405,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('添加'),
+              child: Text(relation == null ? '添加' : '保存'),
             ),
           ],
         ),
@@ -409,16 +413,19 @@ class _RoleEditPageState extends State<RoleEditPage> {
     );
     if (mounted && created == true && name.text.trim().isNotEmpty) {
       setState(() {
-        _relations.add(
-          RoleRelation(
-            id: newEntityId('relation'),
-            targetRoleId: targetId,
-            name: name.text.trim(),
-            direction: direction,
-            description: description.text.trim(),
-            stage: stage.text.trim(),
-          ),
+        final updated = RoleRelation(
+          id: relation?.id ?? newEntityId('relation'),
+          targetRoleId: targetId,
+          name: name.text.trim(),
+          direction: direction,
+          description: description.text.trim(),
+          stage: stage.text.trim(),
         );
+        if (relation == null) {
+          _relations.add(updated);
+        } else {
+          _relations[_relations.indexOf(relation)] = updated;
+        }
       });
     }
     // The dialog remains in the overlay during its reverse transition.
@@ -582,7 +589,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
                           children: [
                             const Expanded(child: Text('人物关系')),
                             TextButton.icon(
-                              onPressed: _addRelation,
+                              onPressed: () => _editRelation(),
                               icon: const Icon(Icons.add_rounded, size: 18),
                               label: const Text('新增'),
                             ),
@@ -601,6 +608,7 @@ class _RoleEditPageState extends State<RoleEditPage> {
                           return ListTile(
                             dense: true,
                             contentPadding: EdgeInsets.zero,
+                            onTap: () => _editRelation(relation),
                             title: Text(
                               '${relation.name} · ${target?.name ?? '已删除角色'}',
                             ),
@@ -611,11 +619,22 @@ class _RoleEditPageState extends State<RoleEditPage> {
                                 relation.description,
                               ].where((value) => value.isNotEmpty).join(' · '),
                             ),
-                            trailing: IconButton(
-                              tooltip: '移除关系',
-                              onPressed: () =>
-                                  setState(() => _relations.remove(relation)),
-                              icon: const Icon(Icons.close_rounded),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: '编辑关系',
+                                  onPressed: () => _editRelation(relation),
+                                  icon: const Icon(Icons.edit_outlined),
+                                ),
+                                IconButton(
+                                  tooltip: '移除关系',
+                                  onPressed: () => setState(
+                                    () => _relations.remove(relation),
+                                  ),
+                                  icon: const Icon(Icons.close_rounded),
+                                ),
+                              ],
                             ),
                           );
                         }),
@@ -1653,22 +1672,85 @@ class _CustomFieldInput extends StatelessWidget {
         ),
       );
     }
+    if (field.type == 'longText') {
+      return _ExpandableCustomTextField(
+        label: field.name,
+        value: value?.toString() ?? '',
+        onChanged: onChanged,
+      );
+    }
     return TextFormField(
       initialValue: value?.toString() ?? '',
       keyboardType: switch (field.type) {
         'number' => const TextInputType.numberWithOptions(decimal: true),
-        'longText' => TextInputType.multiline,
         _ => TextInputType.text,
       },
-      textInputAction: field.type == 'longText'
-          ? TextInputAction.newline
-          : null,
-      minLines: field.type == 'longText' ? 3 : 1,
-      maxLines: field.type == 'longText' ? 6 : 1,
+      minLines: 1,
+      maxLines: 1,
       onChanged: onChanged,
       decoration: const InputDecoration(isDense: true),
     );
   }
+}
+
+class _ExpandableCustomTextField extends StatefulWidget {
+  const _ExpandableCustomTextField({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String value;
+  final ValueChanged<dynamic> onChanged;
+
+  @override
+  State<_ExpandableCustomTextField> createState() =>
+      _ExpandableCustomTextFieldState();
+}
+
+class _ExpandableCustomTextFieldState
+    extends State<_ExpandableCustomTextField> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value,
+  );
+
+  @override
+  void didUpdateWidget(covariant _ExpandableCustomTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != oldWidget.value && widget.value != _controller.text) {
+      _controller.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextFormField(
+    controller: _controller,
+    keyboardType: TextInputType.multiline,
+    textInputAction: TextInputAction.newline,
+    minLines: 3,
+    maxLines: 6,
+    onChanged: widget.onChanged,
+    decoration: InputDecoration(
+      isDense: true,
+      suffixIcon: IconButton(
+        tooltip: '放大编辑${widget.label}',
+        onPressed: () => _openExpandedTextEditor(
+          context,
+          widget.label,
+          _controller,
+          widget.onChanged,
+        ),
+        icon: const Icon(Icons.open_in_full_rounded),
+      ),
+    ),
+  );
 }
 
 class _DetailSection extends StatelessWidget {
@@ -2090,12 +2172,24 @@ class _ReferenceField extends StatelessWidget {
             minLines: maxLines == 1 ? 1 : 2,
             maxLines: maxLines,
             onChanged: onChanged,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              contentPadding: EdgeInsets.symmetric(
+              contentPadding: const EdgeInsets.symmetric(
                 horizontal: 14,
                 vertical: 13,
               ),
+              suffixIcon: maxLines > 1
+                  ? IconButton(
+                      tooltip: '放大编辑$label',
+                      onPressed: () => _openExpandedTextEditor(
+                        context,
+                        label,
+                        controller,
+                        onChanged,
+                      ),
+                      icon: const Icon(Icons.open_in_full_rounded),
+                    )
+                  : null,
             ),
           ),
         ],
@@ -2177,15 +2271,71 @@ Widget _formField(
 }) {
   return Padding(
     padding: const EdgeInsets.only(bottom: 12),
-    child: TextField(
-      controller: controller,
-      autofocus: autofocus,
-      minLines: maxLines == 1 ? 1 : 2,
-      maxLines: maxLines,
-      decoration: InputDecoration(labelText: label),
+    child: Builder(
+      builder: (context) => TextField(
+        controller: controller,
+        autofocus: autofocus,
+        minLines: maxLines == 1 ? 1 : 2,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: maxLines > 1
+              ? IconButton(
+                  tooltip: '放大编辑$label',
+                  onPressed: () =>
+                      _openExpandedTextEditor(context, label, controller),
+                  icon: const Icon(Icons.open_in_full_rounded),
+                )
+              : null,
+        ),
+      ),
     ),
   );
 }
+
+Future<void> _openExpandedTextEditor(
+  BuildContext context,
+  String label,
+  TextEditingController controller, [
+  ValueChanged<String>? onChanged,
+]) => Navigator.push<void>(
+  context,
+  MaterialPageRoute(
+    builder: (context) => Scaffold(
+      appBar: AppBar(
+        title: Text(label),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('完成'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: TextField(
+            key: const ValueKey('expanded-text-editor'),
+            controller: controller,
+            autofocus: true,
+            expands: true,
+            maxLines: null,
+            minLines: null,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            textAlignVertical: TextAlignVertical.top,
+            onChanged: onChanged,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              contentPadding: EdgeInsets.all(16),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
 
 List<String> _splitValues(String value) => value
     .split(RegExp(r'[,，、]'))

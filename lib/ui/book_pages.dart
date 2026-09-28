@@ -16,6 +16,8 @@ class BookSettingsPage extends StatefulWidget {
 
 class _BookSettingsPageState extends State<BookSettingsPage> {
   var _tab = 0;
+  String? _roleTag;
+  String? _worldTag;
 
   @override
   void initState() {
@@ -33,6 +35,38 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
     final enabledFields = baseFields
         .where((field) => field.enabled && !field.deleted)
         .toList();
+    final tags =
+        (_tab == 0 ? book.roles : book.worlds)
+            .expand(
+              (item) => item is RoleCard ? item.tags : (item as WorldCard).tags,
+            )
+            .toSet()
+            .toList()
+          ..sort();
+    final hasUntagged = _tab == 0
+        ? book.roles.any((role) => role.tags.isEmpty)
+        : book.worlds.any((world) => world.tags.isEmpty);
+    if (hasUntagged) tags.insert(0, '');
+    final requestedTag = _tab == 0 ? _roleTag : _worldTag;
+    final selectedTag = tags.contains(requestedTag) ? requestedTag : null;
+    final visibleRoles = selectedTag == null
+        ? book.roles
+        : book.roles
+              .where(
+                (role) => selectedTag.isEmpty
+                    ? role.tags.isEmpty
+                    : role.tags.contains(selectedTag),
+              )
+              .toList();
+    final visibleWorlds = selectedTag == null
+        ? book.worlds
+        : book.worlds
+              .where(
+                (world) => selectedTag.isEmpty
+                    ? world.tags.isEmpty
+                    : world.tags.contains(selectedTag),
+              )
+              .toList();
     return Column(
       children: [
         const _FixedPageHeader(title: '人物与世界'),
@@ -81,22 +115,113 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
                   onManage: () => _showTemplateFields(context, book),
                 ),
                 const SizedBox(height: 14),
+                _TagFilter(
+                  tags: tags,
+                  selected: selectedTag,
+                  onSelected: (tag) => setState(() {
+                    if (_tab == 0) {
+                      _roleTag = tag;
+                    } else {
+                      _worldTag = tag;
+                    }
+                  }),
+                  onSort: () => _showSortSheet(context, book),
+                ),
+                const SizedBox(height: 14),
                 if (_tab == 0)
                   _RoleGrid(
                     book: book,
-                    roles: book.roles,
+                    roles: visibleRoles,
                     controller: widget.controller,
+                    onSort: () => _showSortSheet(context, book),
                   )
                 else
                   _WorldGrid(
-                    worlds: book.worlds,
+                    worlds: visibleWorlds,
                     controller: widget.controller,
+                    onSort: () => _showSortSheet(context, book),
                   ),
               ],
             ),
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _showSortSheet(BuildContext context, Book book) async {
+    final roles = _tab == 0;
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: .72,
+        child: StatefulBuilder(
+          builder: (context, setSheetState) {
+            final items = roles ? book.roles : book.worlds;
+            return Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          roles ? '角色卡排序' : '世界观排序',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('完成'),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ReorderableListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    itemCount: items.length,
+                    onReorderItem: (oldIndex, newIndex) {
+                      if (roles) {
+                        widget.controller.reorderRoles(oldIndex, newIndex);
+                      } else {
+                        widget.controller.reorderWorlds(oldIndex, newIndex);
+                      }
+                      setSheetState(() {});
+                    },
+                    itemBuilder: (context, index) {
+                      final item = items[index];
+                      return Card(
+                        key: ValueKey(
+                          roles
+                              ? 'sort-role-${(item as RoleCard).id}'
+                              : 'sort-world-${(item as WorldCard).id}',
+                        ),
+                        child: ListTile(
+                          leading: const Icon(Icons.drag_indicator_rounded),
+                          title: Text(
+                            roles
+                                ? (item as RoleCard).name
+                                : (item as WorldCard).title,
+                          ),
+                          subtitle: Text(
+                            roles
+                                ? (item as RoleCard).tags.join('、')
+                                : (item as WorldCard).tags.join('、'),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 
@@ -467,16 +592,70 @@ String _fieldTypeLabel(String type) => switch (type) {
   _ => '短文本',
 };
 
+class _TagFilter extends StatelessWidget {
+  const _TagFilter({
+    required this.tags,
+    required this.selected,
+    required this.onSelected,
+    required this.onSort,
+  });
+
+  final List<String> tags;
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+  final VoidCallback onSort;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ChoiceChip(
+                  key: const ValueKey('tag-filter-all'),
+                  label: const Text('全部'),
+                  selected: selected == null,
+                  onSelected: (_) => onSelected(null),
+                ),
+                for (final tag in tags) ...[
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    key: ValueKey('tag-filter-$tag'),
+                    label: Text(tag.isEmpty ? '未分类' : tag),
+                    selected: selected == tag,
+                    onSelected: (_) => onSelected(tag),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        TextButton.icon(
+          onPressed: onSort,
+          icon: const Icon(Icons.swap_vert_rounded, size: 18),
+          label: const Text('排序'),
+        ),
+      ],
+    );
+  }
+}
+
 class _RoleGrid extends StatelessWidget {
   const _RoleGrid({
     required this.book,
     required this.roles,
     required this.controller,
+    required this.onSort,
   });
 
   final Book book;
   final List<RoleCard> roles;
   final AppController controller;
+  final VoidCallback onSort;
 
   @override
   Widget build(BuildContext context) {
@@ -484,8 +663,12 @@ class _RoleGrid extends StatelessWidget {
     return _ResponsiveGrid(
       children: roles
           .map(
-            (role) =>
-                _RoleCardView(book: book, role: role, controller: controller),
+            (role) => _RoleCardView(
+              book: book,
+              role: role,
+              controller: controller,
+              onSort: onSort,
+            ),
           )
           .toList(),
     );
@@ -497,11 +680,13 @@ class _RoleCardView extends StatelessWidget {
     required this.book,
     required this.role,
     required this.controller,
+    required this.onSort,
   });
 
   final Book book;
   final RoleCard role;
   final AppController controller;
+  final VoidCallback onSort;
 
   @override
   Widget build(BuildContext context) {
@@ -518,6 +703,7 @@ class _RoleCardView extends StatelessWidget {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
+        onLongPress: onSort,
         onTap: () => Navigator.push<void>(
           context,
           MaterialPageRoute(
@@ -593,33 +779,50 @@ class _RoleCardView extends StatelessWidget {
 }
 
 class _WorldGrid extends StatelessWidget {
-  const _WorldGrid({required this.worlds, required this.controller});
+  const _WorldGrid({
+    required this.worlds,
+    required this.controller,
+    required this.onSort,
+  });
 
   final List<WorldCard> worlds;
   final AppController controller;
+  final VoidCallback onSort;
 
   @override
   Widget build(BuildContext context) {
     if (worlds.isEmpty) return const _EmptyPanel(text: '这本书还没有世界观设定。');
     return _ResponsiveGrid(
       children: worlds
-          .map((world) => _WorldCardView(world: world, controller: controller))
+          .map(
+            (world) => _WorldCardView(
+              world: world,
+              controller: controller,
+              onSort: onSort,
+            ),
+          )
           .toList(),
     );
   }
 }
 
 class _WorldCardView extends StatelessWidget {
-  const _WorldCardView({required this.world, required this.controller});
+  const _WorldCardView({
+    required this.world,
+    required this.controller,
+    required this.onSort,
+  });
 
   final WorldCard world;
   final AppController controller;
+  final VoidCallback onSort;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
+        onLongPress: onSort,
         onTap: () => Navigator.push<void>(
           context,
           MaterialPageRoute(

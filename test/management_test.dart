@@ -16,6 +16,21 @@ class _MemoryStore implements DataStore {
 }
 
 void main() {
+  test('角色卡和世界观的手动排序写入作品数据', () {
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: _MemoryStore(data), data: data);
+    final book = controller.activeBook!;
+
+    controller.reorderRoles(0, 1);
+    controller.reorderWorlds(0, 1);
+
+    expect(book.roles.map((role) => role.id), ['role-2', 'role-1']);
+    expect(book.worlds.map((world) => world.id), ['world-2', 'world-1']);
+    final restored = Book.fromJson(book.toJson());
+    expect(restored.roles.map((role) => role.id), ['role-2', 'role-1']);
+    expect(restored.worlds.map((world) => world.id), ['world-2', 'world-1']);
+  });
+
   test('正文标注随编辑移动，删除关联资料时清理引用', () {
     final data = LibraryData.seeded(profileSetupComplete: true);
     final controller = AppController(store: _MemoryStore(data), data: data);
