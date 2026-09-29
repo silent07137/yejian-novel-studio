@@ -11,10 +11,14 @@ class RoleDetailPage extends StatefulWidget {
     super.key,
     required this.initialRole,
     required this.controller,
+    this.embedded = false,
+    this.onDeleted,
   });
 
   final RoleCard initialRole;
   final AppController controller;
+  final bool embedded;
+  final VoidCallback? onDeleted;
 
   @override
   State<RoleDetailPage> createState() => _RoleDetailPageState();
@@ -75,7 +79,11 @@ class _RoleDetailPageState extends State<RoleDetailPage> {
     );
     if (confirmed != true || !mounted) return;
     widget.controller.deleteRole(_role.id);
-    Navigator.pop(context);
+    if (widget.onDeleted != null) {
+      widget.onDeleted!();
+    } else {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -93,6 +101,7 @@ class _RoleDetailPageState extends State<RoleDetailPage> {
         );
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.embedded,
         title: Text(_role.name),
         actions: [
           IconButton(
@@ -722,10 +731,14 @@ class WorldDetailPage extends StatefulWidget {
     super.key,
     required this.initialWorld,
     required this.controller,
+    this.embedded = false,
+    this.onDeleted,
   });
 
   final WorldCard initialWorld;
   final AppController controller;
+  final bool embedded;
+  final VoidCallback? onDeleted;
 
   @override
   State<WorldDetailPage> createState() => _WorldDetailPageState();
@@ -787,7 +800,11 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
     );
     if (confirmed != true || !mounted) return;
     widget.controller.deleteWorld(_world.id);
-    Navigator.pop(context);
+    if (widget.onDeleted != null) {
+      widget.onDeleted!();
+    } else {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -797,13 +814,15 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
     );
     return Scaffold(
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.embedded,
         title: const Text('世界观详情'),
         actions: [
-          IconButton(
-            tooltip: '搜索世界观',
-            onPressed: _search,
-            icon: const Icon(Icons.search_rounded),
-          ),
+          if (!widget.embedded)
+            IconButton(
+              tooltip: '搜索世界观',
+              onPressed: _search,
+              icon: const Icon(Icons.search_rounded),
+            ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'delete') _delete();
@@ -945,38 +964,40 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
           ),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: NavigationBar(
-          selectedIndex: 1,
-          onDestinationSelected: (index) => _navigateBookPage(
-            const [
-              WorkspacePage.writing,
-              WorkspacePage.characters,
-              WorkspacePage.timeline,
-              WorkspacePage.export,
-            ][index],
-          ),
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.edit_note_rounded),
-              label: '写作',
+      bottomNavigationBar: widget.embedded
+          ? null
+          : SafeArea(
+              top: false,
+              child: NavigationBar(
+                selectedIndex: 1,
+                onDestinationSelected: (index) => _navigateBookPage(
+                  const [
+                    WorkspacePage.writing,
+                    WorkspacePage.characters,
+                    WorkspacePage.timeline,
+                    WorkspacePage.export,
+                  ][index],
+                ),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.edit_note_rounded),
+                    label: '写作',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.collections_bookmark_outlined),
+                    label: '设定',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.account_tree_outlined),
+                    label: '情节',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.ios_share_rounded),
+                    label: '导出',
+                  ),
+                ],
+              ),
             ),
-            NavigationDestination(
-              icon: Icon(Icons.collections_bookmark_outlined),
-              label: '设定',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.account_tree_outlined),
-              label: '情节',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.ios_share_rounded),
-              label: '导出',
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -18,25 +18,44 @@ import 'ai_editor_sheet.dart';
 import 'book_management.dart';
 import 'book_pages.dart';
 
-class WorkspaceShell extends StatelessWidget {
+class WorkspaceShell extends StatefulWidget {
   const WorkspaceShell({super.key, required this.controller});
 
   final AppController controller;
 
   @override
+  State<WorkspaceShell> createState() => _WorkspaceShellState();
+}
+
+class _WorkspaceShellState extends State<WorkspaceShell> {
+  final _bodyKey = GlobalKey<_WorkspaceBodyState>();
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
         return LayoutBuilder(
           builder: (context, constraints) {
-            final desktop = constraints.maxWidth >= 880;
+            final platform = Theme.of(context).platform;
+            final desktopPlatform =
+                platform == TargetPlatform.windows ||
+                platform == TargetPlatform.macOS ||
+                platform == TargetPlatform.linux;
+            final desktop = desktopPlatform && constraints.maxWidth >= 1200;
+            final tablet = !desktop && constraints.maxWidth >= 600;
             final dark = Theme.of(context).brightness == Brightness.dark;
             final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
             final hasMobileBookNavigation =
-                !desktop && !keyboardOpen && controller.isBookWorkspace;
+                !desktop &&
+                !tablet &&
+                !keyboardOpen &&
+                widget.controller.isBookWorkspace;
             final hasMobileAppNavigation =
-                !desktop && !keyboardOpen && controller.isAppNavigationContext;
+                !desktop &&
+                !tablet &&
+                !keyboardOpen &&
+                widget.controller.isAppNavigationContext;
             final hasMobileNavigation =
                 hasMobileBookNavigation || hasMobileAppNavigation;
             final systemStyle = SystemUiOverlayStyle(
@@ -55,9 +74,11 @@ class WorkspaceShell extends StatelessWidget {
             return AnnotatedRegion<SystemUiOverlayStyle>(
               value: systemStyle,
               child: PopScope(
-                canPop: !controller.canGoBack,
+                canPop: !widget.controller.canGoBack,
                 onPopInvokedWithResult: (didPop, _) {
-                  if (!didPop && controller.canGoBack) controller.goBack();
+                  if (!didPop && widget.controller.canGoBack) {
+                    widget.controller.goBack();
+                  }
                 },
                 child: Scaffold(
                   resizeToAvoidBottomInset: true,
@@ -66,18 +87,38 @@ class WorkspaceShell extends StatelessWidget {
                     child: desktop
                         ? Row(
                             children: [
-                              _DesktopSidebar(controller: controller),
+                              _DesktopSidebar(controller: widget.controller),
                               Expanded(
-                                child: _WorkspaceBody(controller: controller),
+                                child: _WorkspaceBody(
+                                  key: _bodyKey,
+                                  controller: widget.controller,
+                                ),
+                              ),
+                            ],
+                          )
+                        : tablet
+                        ? Row(
+                            children: [
+                              _TabletNavigationRail(
+                                controller: widget.controller,
+                              ),
+                              Expanded(
+                                child: _WorkspaceBody(
+                                  key: _bodyKey,
+                                  controller: widget.controller,
+                                ),
                               ),
                             ],
                           )
                         : _FloatingNavigationHost(
-                            controller: controller,
-                            page: controller.page,
+                            controller: widget.controller,
+                            page: widget.controller.page,
                             bookNavigation: hasMobileBookNavigation,
                             hasNavigation: hasMobileNavigation,
-                            child: _WorkspaceBody(controller: controller),
+                            child: _WorkspaceBody(
+                              key: _bodyKey,
+                              controller: widget.controller,
+                            ),
                           ),
                   ),
                 ),
@@ -89,6 +130,89 @@ class WorkspaceShell extends StatelessWidget {
     );
   }
 }
+
+class _TabletNavigationRail extends StatelessWidget {
+  const _TabletNavigationRail({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final pages = <WorkspacePage>[
+      WorkspacePage.home,
+      if (controller.activeBook != null && controller.isBookContext) ...[
+        WorkspacePage.bookOverview,
+        WorkspacePage.writing,
+        WorkspacePage.characters,
+        WorkspacePage.timeline,
+        WorkspacePage.export,
+      ],
+      WorkspacePage.settings,
+    ];
+    final selectedPage =
+        controller.isAppNavigationContext &&
+            controller.page != WorkspacePage.home
+        ? WorkspacePage.settings
+        : controller.page;
+    final selectedIndex = pages.indexOf(selectedPage);
+    return NavigationRail(
+      key: const ValueKey('tablet-navigation-rail'),
+      minWidth: 72,
+      labelType: NavigationRailLabelType.selected,
+      useIndicator: true,
+      scrollable: true,
+      selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
+      onDestinationSelected: (index) {
+        final page = pages[index];
+        if (page == WorkspacePage.home ||
+            page == WorkspacePage.bookOverview ||
+            page == WorkspacePage.settings) {
+          controller.navigate(page);
+        } else {
+          controller.navigateBook(page);
+        }
+      },
+      destinations: [
+        for (final page in pages)
+          NavigationRailDestination(
+            icon: Icon(_tabletIcon(page)),
+            selectedIcon: Icon(_tabletSelectedIcon(page)),
+            label: Text(_tabletLabel(page)),
+          ),
+      ],
+    );
+  }
+}
+
+String _tabletLabel(WorkspacePage page) => switch (page) {
+  WorkspacePage.home => '书架',
+  WorkspacePage.bookOverview => '作品',
+  WorkspacePage.writing => '写作',
+  WorkspacePage.characters => '设定',
+  WorkspacePage.timeline => '情节',
+  WorkspacePage.export => '导出',
+  _ => '设置',
+};
+
+IconData _tabletIcon(WorkspacePage page) => switch (page) {
+  WorkspacePage.home => Icons.grid_view_outlined,
+  WorkspacePage.bookOverview => Icons.menu_book_outlined,
+  WorkspacePage.writing => Icons.edit_note_outlined,
+  WorkspacePage.characters => Icons.collections_bookmark_outlined,
+  WorkspacePage.timeline => Icons.account_tree_outlined,
+  WorkspacePage.export => Icons.ios_share_outlined,
+  _ => Icons.settings_outlined,
+};
+
+IconData _tabletSelectedIcon(WorkspacePage page) => switch (page) {
+  WorkspacePage.home => Icons.grid_view_rounded,
+  WorkspacePage.bookOverview => Icons.menu_book_rounded,
+  WorkspacePage.writing => Icons.edit_note_rounded,
+  WorkspacePage.characters => Icons.collections_bookmark_rounded,
+  WorkspacePage.timeline => Icons.account_tree_rounded,
+  WorkspacePage.export => Icons.ios_share_rounded,
+  _ => Icons.settings_rounded,
+};
 
 class _DesktopSidebar extends StatelessWidget {
   const _DesktopSidebar({required this.controller});
@@ -657,7 +781,7 @@ class _AppNavigationItem extends StatelessWidget {
 }
 
 class _WorkspaceBody extends StatefulWidget {
-  const _WorkspaceBody({required this.controller});
+  const _WorkspaceBody({super.key, required this.controller});
 
   final AppController controller;
 
@@ -1647,6 +1771,7 @@ class WritingPage extends StatelessWidget {
                         key: ValueKey(chapter.id),
                         chapter: chapter,
                         controller: controller,
+                        showDirectoryButton: !showChapterList,
                       ),
               ),
             ),
@@ -1824,83 +1949,88 @@ class _ChapterList extends StatelessWidget {
           right: BorderSide(color: Theme.of(context).dividerColor),
         ),
       ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 10, 10),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    '章节',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '新建章节',
-                  onPressed: () => controller.createChapter(),
-                  icon: const Icon(Icons.add_rounded),
-                ),
-                IconButton(
-                  tooltip: '新建分卷',
-                  onPressed: () => _createVolume(context),
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              children: [
-                if (book.chapters
-                    .where((item) => item.volumeId == null)
-                    .isNotEmpty) ...[
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(8, 8, 8, 6),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 10, 10),
+              child: Row(
+                children: [
+                  const Expanded(
                     child: Text(
-                      '未分卷',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                      '章节',
+                      style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
-                  ...book.chapters
-                      .where((item) => item.volumeId == null)
-                      .map((chapter) => _chapterTile(context, chapter)),
+                  IconButton(
+                    tooltip: '新建章节',
+                    onPressed: () => controller.createChapter(),
+                    icon: const Icon(Icons.add_rounded),
+                  ),
+                  IconButton(
+                    tooltip: '新建分卷',
+                    onPressed: () => _createVolume(context),
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                  ),
                 ],
-                ...book.volumes.map((volume) {
-                  final chapters = book.chapters
-                      .where((item) => item.volumeId == volume.id)
-                      .toList();
-                  return ExpansionTile(
-                    initiallyExpanded: true,
-                    tilePadding: const EdgeInsets.only(left: 8, right: 2),
-                    childrenPadding: EdgeInsets.zero,
-                    title: Text(
-                      volume.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    trailing: IconButton(
-                      tooltip: '在此卷新建章节',
-                      onPressed: () =>
-                          controller.createChapter(volumeId: volume.id),
-                      icon: const Icon(Icons.add_rounded, size: 20),
-                    ),
-                    children: chapters
-                        .map((chapter) => _chapterTile(context, chapter))
-                        .toList(),
-                  );
-                }),
-                if (book.chapters.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('还没有章节'),
-                  ),
-              ],
+              ),
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView(
+                key: PageStorageKey('chapter-list-${book.id}'),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                children: [
+                  if (book.chapters
+                      .where((item) => item.volumeId == null)
+                      .isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(8, 8, 8, 6),
+                      child: Text(
+                        '未分卷',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    ...book.chapters
+                        .where((item) => item.volumeId == null)
+                        .map((chapter) => _chapterTile(context, chapter)),
+                  ],
+                  ...book.volumes.map((volume) {
+                    final chapters = book.chapters
+                        .where((item) => item.volumeId == volume.id)
+                        .toList();
+                    return ExpansionTile(
+                      key: PageStorageKey('chapter-volume-${volume.id}'),
+                      initiallyExpanded: true,
+                      tilePadding: const EdgeInsets.only(left: 8, right: 2),
+                      childrenPadding: EdgeInsets.zero,
+                      title: Text(
+                        volume.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      trailing: IconButton(
+                        tooltip: '在此卷新建章节',
+                        onPressed: () =>
+                            controller.createChapter(volumeId: volume.id),
+                        icon: const Icon(Icons.add_rounded, size: 20),
+                      ),
+                      children: chapters
+                          .map((chapter) => _chapterTile(context, chapter))
+                          .toList(),
+                    );
+                  }),
+                  if (book.chapters.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('还没有章节'),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1979,10 +2109,12 @@ class _EditorPane extends StatefulWidget {
     super.key,
     required this.chapter,
     required this.controller,
+    required this.showDirectoryButton,
   });
 
   final Chapter chapter;
   final AppController controller;
+  final bool showDirectoryButton;
 
   @override
   State<_EditorPane> createState() => _EditorPaneState();
@@ -3005,7 +3137,6 @@ class _EditorPaneState extends State<_EditorPane> {
   @override
   Widget build(BuildContext context) {
     final settings = widget.controller.data.settings;
-    final compact = MediaQuery.sizeOf(context).width < 620;
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return ColoredBox(
       color: Theme.of(context).scaffoldBackgroundColor,
@@ -3019,165 +3150,175 @@ class _EditorPaneState extends State<_EditorPane> {
                 bottom: BorderSide(color: Theme.of(context).dividerColor),
               ),
             ),
-            child: Row(
-              children: [
-                if (compact)
-                  TextButton.icon(
-                    key: const ValueKey('open-chapter-directory'),
-                    onPressed: _showChapterDirectory,
-                    icon: const Icon(Icons.menu_book_outlined, size: 20),
-                    label: const Text('目录'),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                    ),
-                  ),
-                if (!compact) ...[
-                  IconButton(
-                    tooltip: '减小字号',
-                    onPressed: () => widget.controller.updateFontSize(
-                      (settings.fontSize - 1).clamp(14, 32),
-                    ),
-                    icon: const Icon(Icons.text_decrease_rounded, size: 19),
-                  ),
-                  Text('${settings.fontSize.round()}'),
-                  IconButton(
-                    tooltip: '增大字号',
-                    onPressed: () => widget.controller.updateFontSize(
-                      (settings.fontSize + 1).clamp(14, 32),
-                    ),
-                    icon: const Icon(Icons.text_increase_rounded, size: 19),
-                  ),
-                  const SizedBox(width: 8),
-                  Chip(
-                    avatar: const Icon(
-                      Icons.format_line_spacing_rounded,
-                      size: 16,
-                    ),
-                    label: Text('${settings.lineHeight.toStringAsFixed(1)}×'),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-                const Spacer(),
-                IconButton(
-                  key: const ValueKey('ai-editor-menu'),
-                  tooltip: 'AI 助手',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 44,
-                    height: 44,
-                  ),
-                  padding: EdgeInsets.zero,
-                  onPressed: _aiBusy ? null : _openAiSheet,
-                  icon: const Icon(Icons.auto_awesome_outlined),
-                ),
-                if (MediaQuery.sizeOf(context).width >= 480)
-                  Text(
-                    '${widget.chapter.wordCount} 字',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                PopupMenuButton<String>(
-                  key: const ValueKey('markdown-format-menu'),
-                  tooltip: 'Markdown 格式',
-                  icon: const Icon(Icons.code_rounded),
-                  padding: EdgeInsets.zero,
-                  onSelected: _applyMarkdownAction,
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'heading', child: Text('标题 H2')),
-                    PopupMenuItem(value: 'bold', child: Text('加粗')),
-                    PopupMenuItem(value: 'italic', child: Text('斜体')),
-                    PopupMenuItem(value: 'quote', child: Text('引用')),
-                    PopupMenuItem(value: 'list', child: Text('列表')),
-                    PopupMenuItem(value: 'code', child: Text('行内代码')),
-                    PopupMenuDivider(),
-                    PopupMenuItem(value: 'image', child: Text('插入图片')),
-                  ],
-                ),
-                IconButton(
-                  key: const ValueKey('markdown-preview-toggle'),
-                  tooltip: _markdownPreview ? '编辑 Markdown' : '预览 Markdown',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 44,
-                    height: 44,
-                  ),
-                  padding: EdgeInsets.zero,
-                  onPressed: () {
-                    if (!_markdownPreview) FocusScope.of(context).unfocus();
-                    setState(() => _markdownPreview = !_markdownPreview);
-                  },
-                  icon: Icon(
-                    _markdownPreview
-                        ? Icons.edit_outlined
-                        : Icons.visibility_outlined,
-                  ),
-                ),
-                if (MediaQuery.sizeOf(context).width >= 400)
-                  IconButton(
-                    key: const ValueKey('add-chapter-marker'),
-                    tooltip: '添加标注',
-                    constraints: const BoxConstraints.tightFor(
-                      width: 44,
-                      height: 44,
-                    ),
-                    padding: EdgeInsets.zero,
-                    onPressed: _addMarker,
-                    icon: const Icon(Icons.bookmark_add_outlined),
-                  ),
-                IconButton(
-                  key: const ValueKey('open-chapter-markers'),
-                  tooltip: '正文标注',
-                  constraints: const BoxConstraints.tightFor(
-                    width: 44,
-                    height: 44,
-                  ),
-                  padding: EdgeInsets.zero,
-                  onPressed: _showMarkers,
-                  icon: const Icon(Icons.bookmarks_outlined),
-                ),
-                PopupMenuButton<String>(
-                  tooltip: '段落设置',
-                  icon: const Icon(Icons.format_align_left_rounded),
-                  padding: EdgeInsets.zero,
-                  onSelected: (value) {
-                    if (value == 'indent') {
-                      _toggleIndent();
-                    } else if (value == 'line') {
-                      _showLineSpacing();
-                    } else if (value == 'numbers') {
-                      setState(
-                        () => _showParagraphNumbers = !_showParagraphNumbers,
-                      );
-                    }
-                  },
-                  itemBuilder: (menuContext) => [
-                    PopupMenuItem(
-                      value: 'indent',
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onLongPress: () {
-                          Navigator.pop(menuContext);
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            if (mounted) _showIndentSelector();
-                          });
-                        },
-                        child: const SizedBox(
-                          width: double.infinity,
-                          child: Text('切换首行缩进 · 长按选择段落'),
+            child: LayoutBuilder(
+              builder: (context, paneConstraints) {
+                final compact = paneConstraints.maxWidth < 620;
+                return Row(
+                  children: [
+                    if (compact && widget.showDirectoryButton)
+                      TextButton.icon(
+                        key: const ValueKey('open-chapter-directory'),
+                        onPressed: _showChapterDirectory,
+                        icon: const Icon(Icons.menu_book_outlined, size: 20),
+                        label: const Text('目录'),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
                         ),
                       ),
+                    if (!compact) ...[
+                      IconButton(
+                        tooltip: '减小字号',
+                        onPressed: () => widget.controller.updateFontSize(
+                          (settings.fontSize - 1).clamp(14, 32),
+                        ),
+                        icon: const Icon(Icons.text_decrease_rounded, size: 19),
+                      ),
+                      Text('${settings.fontSize.round()}'),
+                      IconButton(
+                        tooltip: '增大字号',
+                        onPressed: () => widget.controller.updateFontSize(
+                          (settings.fontSize + 1).clamp(14, 32),
+                        ),
+                        icon: const Icon(Icons.text_increase_rounded, size: 19),
+                      ),
+                      const SizedBox(width: 8),
+                      Chip(
+                        avatar: const Icon(
+                          Icons.format_line_spacing_rounded,
+                          size: 16,
+                        ),
+                        label: Text(
+                          '${settings.lineHeight.toStringAsFixed(1)}×',
+                        ),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ],
+                    const Spacer(),
+                    IconButton(
+                      key: const ValueKey('ai-editor-menu'),
+                      tooltip: 'AI 助手',
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      onPressed: _aiBusy ? null : _openAiSheet,
+                      icon: const Icon(Icons.auto_awesome_outlined),
                     ),
-                    const PopupMenuDivider(),
-                    PopupMenuItem(
-                      value: 'numbers',
-                      child: Text(_showParagraphNumbers ? '隐藏段落标记' : '显示段落标记'),
+                      if (paneConstraints.maxWidth >= 456)
+                      Text(
+                        '${widget.chapter.wordCount} 字',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    PopupMenuButton<String>(
+                      key: const ValueKey('markdown-format-menu'),
+                      tooltip: 'Markdown 格式',
+                      icon: const Icon(Icons.code_rounded),
+                      padding: EdgeInsets.zero,
+                      onSelected: _applyMarkdownAction,
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(value: 'heading', child: Text('标题 H2')),
+                        PopupMenuItem(value: 'bold', child: Text('加粗')),
+                        PopupMenuItem(value: 'italic', child: Text('斜体')),
+                        PopupMenuItem(value: 'quote', child: Text('引用')),
+                        PopupMenuItem(value: 'list', child: Text('列表')),
+                        PopupMenuItem(value: 'code', child: Text('行内代码')),
+                        PopupMenuDivider(),
+                        PopupMenuItem(value: 'image', child: Text('插入图片')),
+                      ],
                     ),
-                    PopupMenuItem(
-                      value: 'line',
-                      child: Text(
-                        '行距 · ${settings.lineHeight.toStringAsFixed(1)} 倍',
+                    IconButton(
+                      key: const ValueKey('markdown-preview-toggle'),
+                      tooltip: _markdownPreview ? '编辑 Markdown' : '预览 Markdown',
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {
+                        if (!_markdownPreview) FocusScope.of(context).unfocus();
+                        setState(() => _markdownPreview = !_markdownPreview);
+                      },
+                      icon: Icon(
+                        _markdownPreview
+                            ? Icons.edit_outlined
+                            : Icons.visibility_outlined,
                       ),
                     ),
+                      if (paneConstraints.maxWidth >= 376)
+                      IconButton(
+                        key: const ValueKey('add-chapter-marker'),
+                        tooltip: '添加标注',
+                        constraints: const BoxConstraints.tightFor(
+                          width: 44,
+                          height: 44,
+                        ),
+                        padding: EdgeInsets.zero,
+                        onPressed: _addMarker,
+                        icon: const Icon(Icons.bookmark_add_outlined),
+                      ),
+                    IconButton(
+                      key: const ValueKey('open-chapter-markers'),
+                      tooltip: '正文标注',
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      onPressed: _showMarkers,
+                      icon: const Icon(Icons.bookmarks_outlined),
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: '段落设置',
+                      icon: const Icon(Icons.format_align_left_rounded),
+                      padding: EdgeInsets.zero,
+                      onSelected: (value) {
+                        if (value == 'indent') {
+                          _toggleIndent();
+                        } else if (value == 'line') {
+                          _showLineSpacing();
+                        } else if (value == 'numbers') {
+                          setState(
+                            () =>
+                                _showParagraphNumbers = !_showParagraphNumbers,
+                          );
+                        }
+                      },
+                      itemBuilder: (menuContext) => [
+                        PopupMenuItem(
+                          value: 'indent',
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onLongPress: () {
+                              Navigator.pop(menuContext);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) _showIndentSelector();
+                              });
+                            },
+                            child: const SizedBox(
+                              width: double.infinity,
+                              child: Text('切换首行缩进 · 长按选择段落'),
+                            ),
+                          ),
+                        ),
+                        const PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: 'numbers',
+                          child: Text(
+                            _showParagraphNumbers ? '隐藏段落标记' : '显示段落标记',
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'line',
+                          child: Text(
+                            '行距 · ${settings.lineHeight.toStringAsFixed(1)} 倍',
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
-                ),
-              ],
+                );
+              },
             ),
           ),
           Expanded(

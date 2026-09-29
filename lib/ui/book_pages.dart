@@ -18,6 +18,8 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
   var _tab = 0;
   String? _roleTag;
   String? _worldTag;
+  String? _selectedRoleId;
+  String? _selectedWorldId;
 
   @override
   void initState() {
@@ -67,16 +69,58 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
                     : world.tags.contains(selectedTag),
               )
               .toList();
+    final selectedRole =
+        visibleRoles.where((role) => role.id == _selectedRoleId).firstOrNull ??
+        visibleRoles.firstOrNull;
+    final selectedWorld =
+        visibleWorlds
+            .where((world) => world.id == _selectedWorldId)
+            .firstOrNull ??
+        visibleWorlds.firstOrNull;
+    final controls = <Widget>[
+      _SettingsTypeTabs(
+        value: _tab,
+        onChanged: (value) => setState(() {
+          _tab = value;
+          widget.controller.savePageSelection(
+            'book-settings-${book.id}',
+            value,
+          );
+        }),
+      ),
+      const SizedBox(height: 14),
+      _TemplateBanner(
+        count: enabledFields.length,
+        summary: enabledFields.take(4).map((field) => field.name).join('、'),
+        onManage: () => _showTemplateFields(context, book),
+      ),
+      const SizedBox(height: 14),
+      _TagFilter(
+        tags: tags,
+        selected: selectedTag,
+        onSelected: (tag) => setState(() {
+          if (_tab == 0) {
+            _roleTag = tag;
+          } else {
+            _worldTag = tag;
+          }
+        }),
+        onSort: () => _showSortSheet(context, book),
+      ),
+      const SizedBox(height: 14),
+    ];
     return Column(
       children: [
         const _FixedPageHeader(title: '人物与世界'),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1040),
+          child: LayoutBuilder(
+            builder: (context, constraints) => Align(
+              alignment: constraints.maxWidth >= 700
+                  ? Alignment.centerRight
+                  : Alignment.center,
               child: SizedBox(
-                width: double.infinity,
+                width: constraints.maxWidth >= 700 ? 190 : double.infinity,
                 child: OutlinedButton.icon(
                   key: const ValueKey('create-setting-entry'),
                   onPressed: () =>
@@ -89,60 +133,140 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
           ),
         ),
         Expanded(
-          child: _PageScroller(
-            storageId: 'book-settings-${book.id}-$_tab',
-            topPadding: 12,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _SettingsTypeTabs(
-                  value: _tab,
-                  onChanged: (value) => setState(() {
-                    _tab = value;
-                    widget.controller.savePageSelection(
-                      'book-settings-${book.id}',
-                      value,
-                    );
-                  }),
-                ),
-                const SizedBox(height: 14),
-                _TemplateBanner(
-                  count: enabledFields.length,
-                  summary: enabledFields
-                      .take(4)
-                      .map((field) => field.name)
-                      .join('、'),
-                  onManage: () => _showTemplateFields(context, book),
-                ),
-                const SizedBox(height: 14),
-                _TagFilter(
-                  tags: tags,
-                  selected: selectedTag,
-                  onSelected: (tag) => setState(() {
-                    if (_tab == 0) {
-                      _roleTag = tag;
-                    } else {
-                      _worldTag = tag;
-                    }
-                  }),
-                  onSort: () => _showSortSheet(context, book),
-                ),
-                const SizedBox(height: 14),
-                if (_tab == 0)
-                  _RoleGrid(
-                    book: book,
-                    roles: visibleRoles,
-                    controller: widget.controller,
-                    onSort: () => _showSortSheet(context, book),
+          child: LayoutBuilder(
+            builder: (context, constraints) => constraints.maxWidth >= 700
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ...controls,
+                        Expanded(
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: (constraints.maxWidth * .34).clamp(
+                                  260.0,
+                                  320.0,
+                                ),
+                                child: ListView.builder(
+                                  key: PageStorageKey(
+                                    'tablet-settings-list-${book.id}-$_tab',
+                                  ),
+                                  itemCount: _tab == 0
+                                      ? visibleRoles.length
+                                      : visibleWorlds.length,
+                                  itemBuilder: (context, index) {
+                                    if (_tab == 0) {
+                                      final role = visibleRoles[index];
+                                      return Card(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 8,
+                                        ),
+                                        child: ListTile(
+                                          key: ValueKey(
+                                            'tablet-role-${role.id}',
+                                          ),
+                                          selected: selectedRole?.id == role.id,
+                                          title: Text(role.name),
+                                          subtitle: Text(
+                                            role.tags.join('、').isEmpty
+                                                ? role.identity
+                                                : role.tags.join('、'),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          onTap: () => setState(
+                                            () => _selectedRoleId = role.id,
+                                          ),
+                                          onLongPress: () =>
+                                              _showSortSheet(context, book),
+                                        ),
+                                      );
+                                    }
+                                    final world = visibleWorlds[index];
+                                    return Card(
+                                      margin: const EdgeInsets.only(bottom: 8),
+                                      child: ListTile(
+                                        key: ValueKey(
+                                          'tablet-world-${world.id}',
+                                        ),
+                                        selected: selectedWorld?.id == world.id,
+                                        title: Text(world.title),
+                                        subtitle: Text(
+                                          '${world.type} · ${world.tags.join('、')}',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        onTap: () => setState(
+                                          () => _selectedWorldId = world.id,
+                                        ),
+                                        onLongPress: () =>
+                                            _showSortSheet(context, book),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                              const VerticalDivider(width: 25),
+                              Expanded(
+                                child: _tab == 0
+                                    ? selectedRole == null
+                                          ? const Center(child: Text('还没有角色卡'))
+                                          : RoleDetailPage(
+                                              key: ValueKey(
+                                                'tablet-role-detail-${selectedRole.id}',
+                                              ),
+                                              initialRole: selectedRole,
+                                              controller: widget.controller,
+                                              embedded: true,
+                                              onDeleted: () => setState(
+                                                () => _selectedRoleId = null,
+                                              ),
+                                            )
+                                    : selectedWorld == null
+                                    ? const Center(child: Text('还没有世界观条目'))
+                                    : WorldDetailPage(
+                                        key: ValueKey(
+                                          'tablet-world-detail-${selectedWorld.id}',
+                                        ),
+                                        initialWorld: selectedWorld,
+                                        controller: widget.controller,
+                                        embedded: true,
+                                        onDeleted: () => setState(
+                                          () => _selectedWorldId = null,
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   )
-                else
-                  _WorldGrid(
-                    worlds: visibleWorlds,
-                    controller: widget.controller,
-                    onSort: () => _showSortSheet(context, book),
+                : _PageScroller(
+                    storageId: 'book-settings-${book.id}-$_tab',
+                    topPadding: 12,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ...controls,
+                        if (_tab == 0)
+                          _RoleGrid(
+                            book: book,
+                            roles: visibleRoles,
+                            controller: widget.controller,
+                            onSort: () => _showSortSheet(context, book),
+                          )
+                        else
+                          _WorldGrid(
+                            worlds: visibleWorlds,
+                            controller: widget.controller,
+                            onSort: () => _showSortSheet(context, book),
+                          ),
+                      ],
+                    ),
                   ),
-              ],
-            ),
           ),
         ),
       ],

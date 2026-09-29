@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yejian_native/ai/ai_service.dart';
@@ -738,6 +739,118 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.activeChapter?.title, '不肯熄灭的灯');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('平板使用窄导航栏，写作与设定保持双栏', (tester) async {
+    tester.view.physicalSize = const Size(800, 1024);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final rail = find.byKey(const ValueKey('tablet-navigation-rail'));
+    expect(rail, findsOneWidget);
+    expect(find.byKey(const ValueKey('book-nav-capsule')), findsNothing);
+    expect(find.text('本书 · 写作'), findsNothing);
+
+    tester.widget<NavigationRail>(rail).onDestinationSelected!(2);
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.writing);
+    expect(find.text('不肯熄灭的灯'), findsWidgets);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is TextField && widget.scrollController != null,
+      ),
+      findsOneWidget,
+    );
+
+    tester.widget<NavigationRail>(rail).onDestinationSelected!(3);
+    await tester.pumpAndSettle();
+    expect(controller.page, WorkspacePage.characters);
+    expect(
+      find.byKey(ValueKey('tablet-role-${data.books.first.roles.first.id}')),
+      findsOneWidget,
+    );
+    expect(find.byType(RoleDetailPage), findsOneWidget);
+    await tester.tap(find.text('世界观').first);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(ValueKey('tablet-world-${data.books.first.worlds.first.id}')),
+      findsOneWidget,
+    );
+    expect(find.byType(WorldDetailPage), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('手机和平板切换时保留正文与编辑滚动位置', (tester) async {
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final chapter = data.books.first.chapters.first;
+    chapter.body = List.generate(90, (index) => '第 $index 段正文。').join('\n');
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    controller.openChapter(chapter.id);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    final editor = find.byWidgetPredicate(
+      (widget) => widget is TextField && widget.scrollController != null,
+    );
+    final originalScroll = tester.widget<TextField>(editor).scrollController!;
+    originalScroll.jumpTo(340);
+    await tester.pumpAndSettle();
+    expect(originalScroll.offset, greaterThan(300));
+
+    tester.view.physicalSize = const Size(800, 1024);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('tablet-navigation-rail')),
+      findsOneWidget,
+    );
+    expect(controller.activeChapter?.id, chapter.id);
+    expect(
+      tester.widget<TextField>(editor).scrollController!.offset,
+      greaterThan(300),
+    );
+
+    tester.view.physicalSize = const Size(412, 915);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('book-nav-capsule')), findsOneWidget);
+    expect(controller.activeChapter?.id, chapter.id);
+    expect(
+      tester.widget<TextField>(editor).scrollController!.offset,
+      greaterThan(300),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pump(const Duration(milliseconds: 900));
+  });
+
+  testWidgets('桌面宽屏保留原有侧栏而不显示平板导航栏', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final data = LibraryData.seeded(profileSetupComplete: true);
+    final controller = AppController(store: MemoryStore(data), data: data);
+    controller.openBook(data.books.first.id);
+    await tester.pumpWidget(YejianApp(controller: controller));
+    await tester.pumpAndSettle();
+    expect(find.text('本书 · 写作'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tablet-navigation-rail')), findsNothing);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.pump(const Duration(milliseconds: 900));
   });
 
   testWidgets('书内导航包含写作设定情节导出并支持系统返回', (tester) async {
