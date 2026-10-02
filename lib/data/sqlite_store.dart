@@ -28,18 +28,35 @@ class RevisionConflict implements Exception {
 ///
 /// Android 使用 sqflite，Windows/Linux/macOS 使用同一套 SQLite 架构的 FFI
 /// 实现。旧版 library.json 仅作为一次性迁移来源，不再作为主存储。
-class SqliteStore implements DataStore {
-  SqliteStore({this.databasePath, this.factory, this.legacyJsonPath});
+class SqliteStore implements SectionedDataStore {
+  SqliteStore({
+    this.databasePath,
+    this.factory,
+    this.legacyJsonPath,
+    this.lazyLoad = false,
+  });
 
-  static const databaseVersion = 2;
+  static const databaseVersion = 3;
   static const databaseFileName = 'yejian.db';
 
   final String? databasePath;
   final DatabaseFactory? factory;
   final String? legacyJsonPath;
+  final bool lazyLoad;
   Database? _db;
+  Future<Database>? _opening;
+  final Map<String, String> _chapterMetadataSnapshots = {};
+  final Map<String, String> _chapterBodySnapshots = {};
 
-  Future<Database> get database async => _db ??= await _open();
+  Future<Database> get database {
+    if (_db case final Database db) return Future.value(db);
+    return _opening ??= _open()
+        .then((db) {
+          _db = db;
+          return db;
+        })
+        .whenComplete(() => _opening = null);
+  }
 
   Future<Database> _open() async {
     final selectedFactory = factory ?? _platformFactory();
@@ -62,6 +79,49 @@ class SqliteStore implements DataStore {
           if (oldVersion < 2) {
             await db.execute(
               "ALTER TABLE app_settings ADD COLUMN appearance_mode TEXT NOT NULL DEFAULT 'light'",
+            );
+          }
+          if (oldVersion < 3) {
+            await db.execute(
+              'ALTER TABLE chapters ADD COLUMN word_count INTEGER',
+            );
+            for (final row in await db.query(
+              'chapters',
+              columns: ['id', 'body'],
+            )) {
+              final count = Chapter(
+                id: row['id']! as String,
+                title: '',
+                body: row['body'] as String? ?? '',
+              ).wordCount;
+              await db.update(
+                'chapters',
+                {'word_count': count},
+                where: 'id = ?',
+                whereArgs: [row['id']],
+              );
+            }
+            await db.execute(
+              'ALTER TABLE structured_entities ADD COLUMN chapter_id TEXT',
+            );
+            // Do not require SQLite's optional JSON extension on older Android
+            // devices. Decode the existing attachment metadata in Dart.
+            for (final row in await db.query(
+              'structured_entities',
+              columns: ['entity_type', 'id', 'payload'],
+              where: "entity_type IN ('chapter_marker', 'chapter_image')",
+            )) {
+              final payload =
+                  jsonDecode(row['payload']! as String) as Map<String, dynamic>;
+              await db.update(
+                'structured_entities',
+                {'chapter_id': payload['chapterId']},
+                where: 'entity_type = ? AND id = ?',
+                whereArgs: [row['entity_type'], row['id']],
+              );
+            }
+            await db.execute(
+              'CREATE INDEX idx_structured_chapter ON structured_entities(project_id, entity_type, chapter_id)',
             );
           }
         },
@@ -140,6 +200,7 @@ class SqliteStore implements DataStore {
         volume_id TEXT REFERENCES volumes(id),
         title TEXT NOT NULL,
         body TEXT NOT NULL DEFAULT '',
+        word_count INTEGER,
         summary TEXT NOT NULL DEFAULT '',
         status TEXT NOT NULL DEFAULT '草稿',
         export_enabled INTEGER NOT NULL DEFAULT 1,
@@ -155,6 +216,7 @@ class SqliteStore implements DataStore {
         entity_type TEXT NOT NULL,
         id TEXT NOT NULL,
         project_id TEXT NOT NULL REFERENCES projects(id),
+        chapter_id TEXT,
         sort_index INTEGER NOT NULL DEFAULT 0,
         payload TEXT NOT NULL,
         revision INTEGER NOT NULL DEFAULT 1,
@@ -212,6 +274,9 @@ class SqliteStore implements DataStore {
       'CREATE INDEX idx_entities_project ON structured_entities(project_id, entity_type, deleted_at, sort_index)',
     );
     await db.execute(
+      'CREATE INDEX idx_structured_chapter ON structured_entities(project_id, entity_type, chapter_id)',
+    );
+    await db.execute(
       'CREATE INDEX idx_revisions_entity ON entity_revisions(entity_type, entity_id, revision DESC)',
     );
   }
@@ -264,16 +329,31 @@ class SqliteStore implements DataStore {
     );
     final chapterRows = await db.query(
       'chapters',
+      columns: lazyLoad
+          ? [
+              'id',
+              'volume_id',
+              'title',
+              'summary',
+              'status',
+              'export_enabled',
+              'sort_index',
+              'updated_at',
+              'word_count',
+            ]
+          : null,
       where: 'project_id = ? AND deleted_at IS NULL',
       whereArgs: [projectId],
       orderBy: 'sort_index',
     );
-    final entities = await db.query(
-      'structured_entities',
-      where: 'project_id = ? AND deleted_at IS NULL',
-      whereArgs: [projectId],
-      orderBy: 'entity_type, sort_index',
-    );
+    final entities = lazyLoad
+        ? <Map<String, Object?>>[]
+        : await db.query(
+            'structured_entities',
+            where: 'project_id = ? AND deleted_at IS NULL',
+            whereArgs: [projectId],
+            orderBy: 'entity_type, sort_index',
+          );
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final entity in entities) {
       final type = entity['entity_type']! as String;
@@ -300,6 +380,28 @@ class SqliteStore implements DataStore {
           .putIfAbsent(chapterId, () => [])
           .add(ChapterImage.fromJson(payload));
     }
+    final sectionCounts = <String, int>{};
+    if (lazyLoad) {
+      for (final count in await db.rawQuery(
+        'SELECT entity_type, COUNT(*) AS total FROM structured_entities WHERE project_id = ? AND deleted_at IS NULL GROUP BY entity_type',
+        [projectId],
+      )) {
+        sectionCounts[count['entity_type']! as String] = count['total']! as int;
+      }
+      for (final chapter in chapterRows) {
+        _chapterMetadataSnapshots[chapter['id']! as String] = jsonEncode({
+          'project_id': projectId,
+          'volume_id': chapter['volume_id'],
+          'title': chapter['title'],
+          'summary': chapter['summary'],
+          'status': chapter['status'],
+          'export_enabled': chapter['export_enabled'],
+          'sort_index': chapter['sort_index'],
+          'updated_at': chapter['updated_at'],
+          'word_count': chapter['word_count'],
+        });
+      }
+    }
     return Book(
       id: projectId,
       title: row['title']! as String,
@@ -324,6 +426,8 @@ class SqliteStore implements DataStore {
               title: item['title']! as String,
               volumeId: item['volume_id'] as String?,
               body: item['body'] as String? ?? '',
+              bodyLoaded: !lazyLoad,
+              savedWordCount: item['word_count'] as int?,
               summary: item['summary'] as String? ?? '',
               status: item['status'] as String? ?? '草稿',
               exportEnabled: (item['export_enabled'] as int? ?? 1) == 1,
@@ -357,6 +461,8 @@ class SqliteStore implements DataStore {
       storyLinks: _decodeList(grouped['story_link'], StoryLink.fromJson),
       clues: _decodeList(grouped['clue'], PlotClue.fromJson),
       notes: _decodeList(grouped['note'], IdeaNote.fromJson),
+      loadedSections: lazyLoad ? <BookSection>{} : null,
+      sectionCounts: sectionCounts,
       createdAt: DateTime.tryParse(row['created_at'] as String? ?? ''),
       updatedAt: DateTime.tryParse(row['updated_at'] as String? ?? ''),
     );
@@ -368,12 +474,113 @@ class SqliteStore implements DataStore {
   ) => (values ?? const []).map(decoder).toList();
 
   @override
+  Future<void> loadChapter(Book book, Chapter chapter) async {
+    if (chapter.bodyLoaded) return;
+    final db = await database;
+    final rows = await db.query(
+      'chapters',
+      columns: ['body'],
+      where: 'project_id = ? AND id = ? AND deleted_at IS NULL',
+      whereArgs: [book.id, chapter.id],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw StateError('章节已经不存在，请重新打开作品');
+    final entities = await db.query(
+      'structured_entities',
+      columns: ['entity_type', 'payload'],
+      where: "project_id = ? AND chapter_id = ? AND entity_type IN ('chapter_marker', 'chapter_image') AND deleted_at IS NULL",
+      whereArgs: [book.id, chapter.id],
+      orderBy: 'sort_index',
+    );
+    // Publish the hydrated chapter only after every part has been read.
+    final markers = <ChapterMarker>[];
+    final images = <ChapterImage>[];
+    for (final row in entities) {
+      final json =
+          jsonDecode(row['payload']! as String) as Map<String, dynamic>;
+      if (row['entity_type'] == 'chapter_marker') {
+        markers.add(ChapterMarker.fromJson(json));
+      } else {
+        images.add(ChapterImage.fromJson(json));
+      }
+    }
+    chapter.markers = markers;
+    chapter.images = images;
+    chapter.body = rows.single['body']! as String;
+    _chapterBodySnapshots[chapter.id] = chapter.body;
+  }
+
+  @override
+  Future<void> loadSection(Book book, BookSection section) async {
+    if (book.loadedSections.contains(section)) return;
+    final types = switch (section) {
+      BookSection.roles => ['role', 'role_field', 'role_base_field'],
+      BookSection.worlds => ['world', 'world_field', 'world_base_field'],
+      BookSection.story => ['track', 'event', 'story_link', 'clue', 'note'],
+    };
+    final db = await database;
+    final rows = await db.query(
+      'structured_entities',
+      columns: ['entity_type', 'payload'],
+      where:
+          'project_id = ? AND entity_type IN (${List.filled(types.length, '?').join(',')}) AND deleted_at IS NULL',
+      whereArgs: [book.id, ...types],
+      orderBy: 'entity_type, sort_index',
+    );
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      grouped
+          .putIfAbsent(row['entity_type']! as String, () => [])
+          .add(jsonDecode(row['payload']! as String) as Map<String, dynamic>);
+    }
+    switch (section) {
+      case BookSection.roles:
+        book.roles = _decodeList(grouped['role'], RoleCard.fromJson);
+        book.roleFields = _decodeList(
+          grouped['role_field'],
+          CustomFieldDefinition.fromJson,
+        );
+        book.roleBaseFields = grouped['role_base_field']?.isNotEmpty == true
+            ? _decodeList(
+                grouped['role_base_field'],
+                CustomFieldDefinition.fromJson,
+              )
+            : defaultRoleBaseFields();
+      case BookSection.worlds:
+        book.worlds = _decodeList(grouped['world'], WorldCard.fromJson);
+        book.worldFields = _decodeList(
+          grouped['world_field'],
+          CustomFieldDefinition.fromJson,
+        );
+        book.worldBaseFields = grouped['world_base_field']?.isNotEmpty == true
+            ? _decodeList(
+                grouped['world_base_field'],
+                CustomFieldDefinition.fromJson,
+              )
+            : defaultWorldBaseFields();
+      case BookSection.story:
+        book.tracks = _decodeList(grouped['track'], StoryTrack.fromJson);
+        book.events = _decodeList(grouped['event'], StoryEvent.fromJson);
+        book.storyLinks = _decodeList(
+          grouped['story_link'],
+          StoryLink.fromJson,
+        );
+        book.clues = _decodeList(grouped['clue'], PlotClue.fromJson);
+        book.notes = _decodeList(grouped['note'], IdeaNote.fromJson);
+        normalizeTimelineEventOrder(book.events);
+    }
+    book.loadedSections.add(section);
+  }
+
+  @override
   Future<void> save(LibraryData data) async {
     final db = await database;
     await _saveToDatabase(db, data);
   }
 
   Future<void> _saveToDatabase(Database db, LibraryData data) async {
+    final metadataSnapshots = <String, String>{};
+    final bodySnapshots = <String, String>{};
     await db.transaction((txn) async {
       await txn.insert('app_profile', {
         'id': 1,
@@ -410,13 +617,20 @@ class SqliteStore implements DataStore {
             'sort_index': index,
           },
         );
-        await _saveProjectChildren(txn, book);
+        await _saveProjectChildren(txn, book, metadataSnapshots, bodySnapshots);
       }
       await _softDeleteMissing(txn, table: 'projects', activeIds: projectIds);
     });
+    _chapterMetadataSnapshots.addAll(metadataSnapshots);
+    _chapterBodySnapshots.addAll(bodySnapshots);
   }
 
-  Future<void> _saveProjectChildren(Transaction txn, Book book) async {
+  Future<void> _saveProjectChildren(
+    Transaction txn,
+    Book book,
+    Map<String, String> metadataSnapshots,
+    Map<String, String> bodySnapshots,
+  ) async {
     final volumeIds = <String>{};
     for (var index = 0; index < book.volumes.length; index++) {
       final volume = book.volumes[index];
@@ -450,23 +664,47 @@ class SqliteStore implements DataStore {
       final chapter = book.chapters[index];
       chapter.sortIndex = index;
       chapterIds.add(chapter.id);
+      final metadata = <String, Object?>{
+        'project_id': book.id,
+        'volume_id': chapter.volumeId,
+        'title': chapter.title,
+        'summary': chapter.summary,
+        'status': chapter.status,
+        'export_enabled': chapter.exportEnabled ? 1 : 0,
+        'sort_index': index,
+        'updated_at': chapter.updatedAt.toIso8601String(),
+        'word_count': chapter.wordCount,
+      };
+      final metadataText = jsonEncode(metadata);
+      if (_chapterMetadataSnapshots[chapter.id] == metadataText &&
+          (!chapter.bodyLoaded ||
+              _chapterBodySnapshots[chapter.id] == chapter.body)) {
+        continue;
+      }
+      // Metadata edits on an unopened chapter must preserve its stored prose.
+      var body = chapter.body;
+      if (!chapter.bodyLoaded) {
+        final stored = await txn.query(
+          'chapters',
+          columns: ['body'],
+          where: 'project_id = ? AND id = ? AND deleted_at IS NULL',
+          whereArgs: [book.id, chapter.id],
+          limit: 1,
+        );
+        if (stored.isEmpty) {
+          throw StateError('未加载章节的原文不存在，已取消保存');
+        }
+        body = stored.single['body']! as String;
+      }
       await _upsertVersioned(
         txn,
         table: 'chapters',
         entityType: 'chapter',
         id: chapter.id,
-        values: {
-          'project_id': book.id,
-          'volume_id': chapter.volumeId,
-          'title': chapter.title,
-          'body': chapter.body,
-          'summary': chapter.summary,
-          'status': chapter.status,
-          'export_enabled': chapter.exportEnabled ? 1 : 0,
-          'sort_index': index,
-          'updated_at': chapter.updatedAt.toIso8601String(),
-        },
+        values: {...metadata, 'body': body},
       );
+      metadataSnapshots[chapter.id] = metadataText;
+      if (chapter.bodyLoaded) bodySnapshots[chapter.id] = body;
     }
     await _softDeleteMissing(
       txn,
@@ -476,77 +714,124 @@ class SqliteStore implements DataStore {
       whereArgs: [book.id],
     );
 
-    await _saveStructured(txn, book.id, 'role', book.roles, (v) => v.toJson());
+    if (book.loadedSections.contains(BookSection.roles)) {
+      await _saveStructured(
+        txn,
+        book.id,
+        'role',
+        book.roles,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'role_field',
+        book.roleFields,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'role_base_field',
+        book.roleBaseFields,
+        (v) => v.toJson(),
+        storageId: (v) => '${book.id}:${v.id}',
+      );
+    }
+    if (book.loadedSections.contains(BookSection.worlds)) {
+      await _saveStructured(
+        txn,
+        book.id,
+        'world',
+        book.worlds,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'world_field',
+        book.worldFields,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'world_base_field',
+        book.worldBaseFields,
+        (v) => v.toJson(),
+        storageId: (v) => '${book.id}:${v.id}',
+      );
+    }
+    if (book.loadedSections.contains(BookSection.story)) {
+      await _saveStructured(
+        txn,
+        book.id,
+        'track',
+        book.tracks,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'event',
+        book.events,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'story_link',
+        book.storyLinks,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'clue',
+        book.clues,
+        (v) => v.toJson(),
+      );
+      await _saveStructured(
+        txn,
+        book.id,
+        'note',
+        book.notes,
+        (v) => v.toJson(),
+      );
+    }
+    final loadedChapterIds = book.chapters
+        .where((chapter) => chapter.bodyLoaded)
+        .map((chapter) => chapter.id)
+        .toSet();
+    if (loadedChapterIds.isEmpty) return;
     await _saveStructured(
       txn,
       book.id,
-      'role_field',
-      book.roleFields,
-      (v) => v.toJson(),
+      'chapter_marker',
+      [
+        for (final chapter in book.chapters.where(
+          (chapter) => chapter.bodyLoaded,
+        ))
+          for (final marker in chapter.markers)
+            {...marker.toJson(), 'chapterId': chapter.id},
+      ],
+      (value) => value,
+      chapterIds: loadedChapterIds,
     );
     await _saveStructured(
       txn,
       book.id,
-      'role_base_field',
-      book.roleBaseFields,
-      (v) => v.toJson(),
-      storageId: (v) => '${book.id}:${v.id}',
+      'chapter_image',
+      [
+        for (final chapter in book.chapters.where(
+          (chapter) => chapter.bodyLoaded,
+        ))
+          for (final image in chapter.images)
+            {...image.toJson(), 'chapterId': chapter.id},
+      ],
+      (value) => value,
+      chapterIds: loadedChapterIds,
     );
-    await _saveStructured(
-      txn,
-      book.id,
-      'world',
-      book.worlds,
-      (v) => v.toJson(),
-    );
-    await _saveStructured(
-      txn,
-      book.id,
-      'world_field',
-      book.worldFields,
-      (v) => v.toJson(),
-    );
-    await _saveStructured(
-      txn,
-      book.id,
-      'world_base_field',
-      book.worldBaseFields,
-      (v) => v.toJson(),
-      storageId: (v) => '${book.id}:${v.id}',
-    );
-    await _saveStructured(
-      txn,
-      book.id,
-      'track',
-      book.tracks,
-      (v) => v.toJson(),
-    );
-    await _saveStructured(
-      txn,
-      book.id,
-      'event',
-      book.events,
-      (v) => v.toJson(),
-    );
-    await _saveStructured(
-      txn,
-      book.id,
-      'story_link',
-      book.storyLinks,
-      (v) => v.toJson(),
-    );
-    await _saveStructured(txn, book.id, 'clue', book.clues, (v) => v.toJson());
-    await _saveStructured(txn, book.id, 'note', book.notes, (v) => v.toJson());
-    await _saveStructured(txn, book.id, 'chapter_marker', [
-      for (final chapter in book.chapters)
-        for (final marker in chapter.markers)
-          {...marker.toJson(), 'chapterId': chapter.id},
-    ], (value) => value);
-    await _saveStructured(txn, book.id, 'chapter_image', [
-      for (final chapter in book.chapters)
-        for (final image in chapter.images)
-          {...image.toJson(), 'chapterId': chapter.id},
-    ], (value) => value);
   }
 
   Future<void> _saveStructured<T>(
@@ -556,6 +841,7 @@ class SqliteStore implements DataStore {
     List<T> values,
     Map<String, dynamic> Function(T) encode, {
     String Function(T)? storageId,
+    Set<String>? chapterIds,
   }) async {
     final activeIds = <String>{};
     for (var index = 0; index < values.length; index++) {
@@ -576,6 +862,7 @@ class SqliteStore implements DataStore {
       projectId: projectId,
       entityType: entityType,
       activeIds: activeIds,
+      chapterIds: chapterIds,
     );
   }
 
@@ -612,6 +899,7 @@ class SqliteStore implements DataStore {
       'project_id': projectId,
       'sort_index': sortIndex,
       'payload': payloadText,
+      'chapter_id': payload['chapterId'] as String?,
       'revision': revision,
       'snapshot': snapshot,
       'deleted_at': null,
@@ -719,12 +1007,15 @@ class SqliteStore implements DataStore {
     required String projectId,
     required String entityType,
     required Set<String> activeIds,
+    Set<String>? chapterIds,
   }) async {
     final rows = await txn.query(
       'structured_entities',
       columns: ['id', 'revision', 'snapshot'],
-      where: 'project_id = ? AND entity_type = ? AND deleted_at IS NULL',
-      whereArgs: [projectId, entityType],
+      where:
+          'project_id = ? AND entity_type = ? AND deleted_at IS NULL'
+          '${chapterIds == null ? '' : ' AND chapter_id IN (${List.filled(chapterIds.length, '?').join(',')})'}',
+      whereArgs: [projectId, entityType, ...?chapterIds],
     );
     for (final row in rows) {
       final id = row['id']! as String;
@@ -914,8 +1205,10 @@ class SqliteStore implements DataStore {
   }
 
   Future<void> close() async {
-    final db = _db;
+    final db = _db ?? await _opening;
     _db = null;
+    _chapterMetadataSnapshots.clear();
+    _chapterBodySnapshots.clear();
     await db?.close();
   }
 }

@@ -2,56 +2,61 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product
     Id="*"
-    Name="页间"
+    Name="页间 $(var.AppDisplayVersion)"
     Language="2052"
-    Version="0.2.0"
+    Version="$(var.MsiVersion)"
     Manufacturer="silent07137"
     UpgradeCode="D6C4DB3F-49DF-4D0A-A322-BBC241E7E474">
     <Package
       InstallerVersion="500"
       Compressed="yes"
-      InstallScope="perMachine"
+      InstallScope="perUser"
+      InstallPrivileges="limited"
       Platform="x64"
       Description="页间本地写作工具" />
 
     <MajorUpgrade
       DowngradeErrorMessage="已安装更新版本的页间。"
+      AllowSameVersionUpgrades="yes"
       Schedule="afterInstallInitialize" />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Property Id="ARPPRODUCTICON" Value="YejianIcon" />
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLPARENT" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.ProjectDir)\installer\windows\license.rtf" />
     <Icon Id="YejianIcon" SourceFile="$(var.SourceDir)\yejian.exe" />
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="页间">
-          <Component Id="ApplicationShortcuts" Guid="*" Win64="yes">
-            <Shortcut
-              Id="StartMenuShortcut"
-              Directory="ProgramMenuFolder"
-              Name="页间"
-              Description="页间本地写作工具"
-              Target="[INSTALLFOLDER]yejian.exe"
-              WorkingDirectory="INSTALLFOLDER"
-              Icon="YejianIcon" />
-            <Shortcut
-              Id="DesktopShortcut"
-              Directory="DesktopFolder"
-              Name="页间"
-              Description="页间本地写作工具"
-              Target="[INSTALLFOLDER]yejian.exe"
-              WorkingDirectory="INSTALLFOLDER"
-              Icon="YejianIcon" />
-            <RegistryValue
-              Root="HKCU"
-              Key="Software\silent07137\Yejian"
-              Name="Installed"
-              Type="integer"
-              Value="1"
-              KeyPath="yes" />
-          </Component>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLPARENT" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="yejian">
+            <Component Id="ApplicationShortcuts" Guid="*" Win64="yes">
+              <Shortcut
+                Id="StartMenuShortcut"
+                Directory="ProgramMenuFolder"
+                Name="页间"
+                Description="页间本地写作工具"
+                Target="[INSTALLFOLDER]yejian.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="YejianIcon" />
+              <Shortcut
+                Id="DesktopShortcut"
+                Directory="DesktopFolder"
+                Name="页间"
+                Description="页间本地写作工具"
+                Target="[INSTALLFOLDER]yejian.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="YejianIcon" />
+              <RegistryValue
+                Root="HKCU"
+                Key="Software\silent07137\Yejian"
+                Name="Installed"
+                Type="integer"
+                Value="1"
+                KeyPath="yes" />
+              <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+            </Component>
+          </Directory>
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder" />

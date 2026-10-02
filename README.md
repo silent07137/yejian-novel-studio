@@ -13,8 +13,8 @@
 </p>
 
 > [!IMPORTANT]
-> 页间目前处于 `0.4.0-dev.21` 开发阶段，功能、界面和数据格式仍可能调整。
-> 当前 APK 仅用于开发测试，不建议作为唯一写作环境保存重要作品。
+> 页间目前处于 `0.4.0-dev.33` 开发阶段，功能、界面和数据格式仍可能调整。
+> 当前 APK / MSI 仅用于开发测试，不建议作为唯一写作环境保存重要作品。下载见 [Releases](https://github.com/silent07137/yejian-novel-studio/releases)。
 
 ## 项目简介
 
@@ -55,6 +55,7 @@
 - Android 可通过系统文件界面另存，或关联导出目录。
 - 支持旧版 `library.json` 的一次性迁移，并保留源文件。
 - 工程文件仅在主动导出时生成；导入前预览，遇到已有作品需明确确认替换。格式说明见 [工程文件规范](docs/PROJECT_FORMAT.md)。
+- 新工程采用 v3 分文件 ZIP，本地正文及设定按需读取；可导入旧版工程，旧版应用不能读取新导出的 v3 工程。
 
 ### 移动端适配
 
@@ -67,8 +68,8 @@
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| Android | 开发验证 | 已在 Android 15 Pixel 7 AVD 完成安装、冷启动、基础导航和数据恢复测试 |
-| Windows | 实验性支持 | 保留桌面工程与 MSI 构建脚本，当前开发重点是 Android |
+| Android | 开发验证 | 已在模拟器与 Android 16 真机验证启动、导入导出、长文预览及插图 |
+| Windows | 实验性支持 | 提供 x64 MSI，安装路径和本地数据目录已接通；安装升级仍待协同验收 |
 | 本地存储 | 已接通 | SQLite 事务、修订号、迁移和软删除基础数据层已实现 |
 | 角色与世界观 | 开发中 | 基础编辑可用，模板、标签库、草稿与恢复界面仍需完善 |
 | 情节三视图 | 开发中 | 时间线、思维导图和流程图可交互，布局持久化与连线编辑尚未完成 |
@@ -131,23 +132,24 @@ flutter config --enable-windows-desktop
 flutter build windows --release
 ```
 
-Windows MSI 脚本位于 `tool/build_windows_msi.ps1`。该流程仍处于实验阶段，发布前需要重新核对版本号、升级策略和签名。
+Windows MSI 脚本位于 `tool/build_windows_msi.ps1`，需要 WiX Toolset 3。安装时选择父目录，安装器会自动创建 `yejian` 文件夹；Windows 版作品、图片、AI 历史及加密的 AI 配置均保存在其中的 `user-data` 子目录。首次运行时会复制旧版 AppData 数据，旧文件不会被删除。MSI 仍属实验构建，正式发布前需要验证升级策略并签名。
 
 ## GitHub Actions 与 Beta 发布
 
 - `CI`：推送到 `main` 或创建 Pull Request 时自动运行 `flutter analyze` 和 `flutter test`。
-- `Android Beta`：从 Actions 页面手动触发，使用仓库 Secrets 中的发行密钥构建签名 APK，并创建 GitHub Pre-release。
+- `Windows & Android Beta`：推送 `v0.4.0-dev.N` 标签自动触发，也可从 Actions 页面指定已有标签手动运行。两端构建及校验全部成功后，同一 Pre-release 提供正式签名 APK 和 Windows x64 MSI。
 
-预发布标签直接使用应用版本，例如 `v0.4.0-dev.21`；下一版递增为 `v0.4.0-dev.22`，不再在同一开发版本后追加 `-beta.N`。发布前须填写对应的中文更新说明 `docs/releases/<标签>.md`，工作流会直接用该文件创建预发布页面。
+预发布标签直接使用应用版本，例如 `v0.4.0-dev.33`；下一版递增为 `v0.4.0-dev.34`，不再在同一开发版本后追加 `-beta.N`。发布前须填写对应的中文更新说明 `docs/releases/<标签>.md`，工作流会直接用该文件创建预发布页面。
 
-首次发布前需要创建并备份 Android 发行密钥，再配置四个仓库 Secrets。完整步骤见 [Android Beta 发布说明](docs/RELEASING.md)。
+首次发布前需要创建并备份 Android 发行密钥，再配置四个仓库 Secrets。Windows MSI 暂未代码签名。完整步骤见 [双端 Beta 发布说明](docs/RELEASING.md)。
 
 ## 数据与隐私
 
 - 作品、正文、角色、世界观和情节资料默认保存在设备本地。
 - 应用不要求登录账号。
 - 应用不会自动上传作品，也没有内置遥测或广告 SDK。
-- 数据只会在用户主动导出、分享文件或打开外部项目链接时离开应用。`.sns/.snss` 包含作品全文及作者信息，请勿随意公开。
+- 用户主动使用 AI 助手时，选定的正文与上下文会发送到用户配置的 API 服务；未调用时不会自动发送。
+- 导出、分享文件或打开外部链接均由用户主动发起。`.sns/.snss` 包含作品全文及作者信息，请勿随意公开。
 - 卸载、清除应用数据或设备损坏都可能导致本地内容丢失；请定期导出工程文件并在其他设备保留副本。
 
 ## 目录结构

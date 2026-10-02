@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'data/sqlite_store.dart';
+import 'platform/windows_data_directory.dart';
 import 'state/app_controller.dart';
 import 'theme/app_theme.dart';
 import 'ui/profile_setup_page.dart';
@@ -26,7 +27,8 @@ class _YejianBootstrapState extends State<YejianBootstrap> {
   Future<AppController> _initialize() async {
     try {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      final store = SqliteStore();
+      await configureWindowsDataDirectory();
+      final store = SqliteStore(lazyLoad: true);
       final data = await store.load();
       final controller = AppController(store: store, data: data);
       await controller.loadConfiguredFont();
@@ -149,10 +151,40 @@ class YejianApp extends StatefulWidget {
 }
 
 class _YejianAppState extends State<YejianApp> with WidgetsBindingObserver {
+  late Object _appConfiguration;
+
+  Object _configuration() {
+    final settings = widget.controller.data.settings;
+    return (
+      settings.palette,
+      settings.appearanceMode,
+      widget.controller.loadedFontFamily,
+      widget.controller.data.profile.setupComplete,
+    );
+  }
+
+  void _onConfigurationChanged() {
+    final next = _configuration();
+    if (next == _appConfiguration) return;
+    setState(() => _appConfiguration = next);
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _appConfiguration = _configuration();
+    widget.controller.addListener(_onConfigurationChanged);
+  }
+
+  @override
+  void didUpdateWidget(YejianApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onConfigurationChanged);
+      widget.controller.addListener(_onConfigurationChanged);
+      _appConfiguration = _configuration();
+    }
   }
 
   @override
@@ -167,46 +199,42 @@ class _YejianAppState extends State<YejianApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    widget.controller.removeListener(_onConfigurationChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final settings = widget.controller.data.settings;
-        final themeMode = switch (settings.appearanceMode) {
-          'dark' => ThemeMode.dark,
-          'system' => ThemeMode.system,
-          _ => ThemeMode.light,
-        };
-        return MaterialApp(
-          title: '页间',
-          locale: const Locale('zh', 'CN'),
-          supportedLocales: const [Locale('zh', 'CN')],
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          debugShowCheckedModeBanner: false,
-          themeMode: themeMode,
-          theme: buildTheme(
-            settings.palette,
-            brightness: Brightness.light,
-            customFontFamily: widget.controller.loadedFontFamily,
-          ),
-          darkTheme: buildTheme(
-            settings.palette,
-            brightness: Brightness.dark,
-            customFontFamily: widget.controller.loadedFontFamily,
-          ),
-          home: widget.controller.data.profile.setupComplete
-              ? WorkspaceShell(controller: widget.controller)
-              : OnboardingPage(controller: widget.controller),
-        );
-      },
+    final settings = widget.controller.data.settings;
+    final themeMode = switch (settings.appearanceMode) {
+      'dark' => ThemeMode.dark,
+      'system' => ThemeMode.system,
+      _ => ThemeMode.light,
+    };
+    return MaterialApp(
+      title: '页间',
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
+      theme: buildTheme(
+        settings.palette,
+        brightness: Brightness.light,
+        customFontFamily: widget.controller.loadedFontFamily,
+      ),
+      darkTheme: buildTheme(
+        settings.palette,
+        brightness: Brightness.dark,
+        customFontFamily: widget.controller.loadedFontFamily,
+      ),
+      home: widget.controller.data.profile.setupComplete
+          ? WorkspaceShell(controller: widget.controller)
+          : OnboardingPage(controller: widget.controller),
     );
   }
 }

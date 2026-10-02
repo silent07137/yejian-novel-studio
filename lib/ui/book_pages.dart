@@ -33,6 +33,7 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
   Widget build(BuildContext context) {
     final book = widget.controller.activeBook;
     if (book == null) return const Center(child: Text('请先从书架打开一本书。'));
+    final desktop = MediaQuery.sizeOf(context).width >= 1000;
     final baseFields = _tab == 0 ? book.roleBaseFields : book.worldBaseFields;
     final enabledFields = baseFields
         .where((field) => field.enabled && !field.deleted)
@@ -78,23 +79,25 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
             .firstOrNull ??
         visibleWorlds.firstOrNull;
     final controls = <Widget>[
-      _SettingsTypeTabs(
-        value: _tab,
-        onChanged: (value) => setState(() {
-          _tab = value;
-          widget.controller.savePageSelection(
-            'book-settings-${book.id}',
-            value,
-          );
-        }),
-      ),
-      const SizedBox(height: 14),
-      _TemplateBanner(
-        count: enabledFields.length,
-        summary: enabledFields.take(4).map((field) => field.name).join('、'),
-        onManage: () => _showTemplateFields(context, book),
-      ),
-      const SizedBox(height: 14),
+      if (!desktop) ...[
+        _SettingsTypeTabs(
+          value: _tab,
+          onChanged: (value) => setState(() {
+            _tab = value;
+            widget.controller.savePageSelection(
+              'book-settings-${book.id}',
+              value,
+            );
+          }),
+        ),
+        const SizedBox(height: 14),
+        _TemplateBanner(
+          count: enabledFields.length,
+          summary: enabledFields.take(4).map((field) => field.name).join('、'),
+          onManage: () => _showTemplateFields(context, book),
+        ),
+        const SizedBox(height: 14),
+      ],
       _TagFilter(
         tags: tags,
         selected: selectedTag,
@@ -111,27 +114,30 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
     ];
     return Column(
       children: [
-        const _FixedPageHeader(title: '人物与世界'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
-          child: LayoutBuilder(
-            builder: (context, constraints) => Align(
-              alignment: constraints.maxWidth >= 700
-                  ? Alignment.centerRight
-                  : Alignment.center,
-              child: SizedBox(
-                width: constraints.maxWidth >= 700 ? 190 : double.infinity,
-                child: OutlinedButton.icon(
-                  key: const ValueKey('create-setting-entry'),
-                  onPressed: () =>
-                      _tab == 0 ? _createRole(context) : _createWorld(context),
-                  icon: const Icon(Icons.add_rounded),
-                  label: Text(_tab == 0 ? '新建角色卡' : '新建世界观条目'),
+        if (!desktop) ...[
+          const _FixedPageHeader(title: '人物与世界'),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+            child: LayoutBuilder(
+              builder: (context, constraints) => Align(
+                alignment: constraints.maxWidth >= 700
+                    ? Alignment.centerRight
+                    : Alignment.center,
+                child: SizedBox(
+                  width: constraints.maxWidth >= 700 ? 190 : double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('create-setting-entry'),
+                    onPressed: () => _tab == 0
+                        ? _createRole(context)
+                        : _createWorld(context),
+                    icon: const Icon(Icons.add_rounded),
+                    label: Text(_tab == 0 ? '新建角色卡' : '新建世界观条目'),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
+        ],
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) => constraints.maxWidth >= 700
@@ -140,6 +146,42 @@ class _BookSettingsPageState extends State<BookSettingsPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        if (desktop) ...[
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 250,
+                                child: _SettingsTypeTabs(
+                                  value: _tab,
+                                  onChanged: (value) => setState(() {
+                                    _tab = value;
+                                    widget.controller.savePageSelection(
+                                      'book-settings-${book.id}',
+                                      value,
+                                    );
+                                  }),
+                                ),
+                              ),
+                              const Spacer(),
+                              TextButton.icon(
+                                onPressed: () =>
+                                    _showTemplateFields(context, book),
+                                icon: const Icon(Icons.tune_rounded, size: 18),
+                                label: Text('基础字段 ${enabledFields.length}'),
+                              ),
+                              const SizedBox(width: 8),
+                              OutlinedButton.icon(
+                                key: const ValueKey('create-setting-entry'),
+                                onPressed: () => _tab == 0
+                                    ? _createRole(context)
+                                    : _createWorld(context),
+                                icon: const Icon(Icons.add_rounded),
+                                label: Text(_tab == 0 ? '新建角色卡' : '新建世界观条目'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                        ],
                         ...controls,
                         Expanded(
                           child: Row(
@@ -1060,6 +1102,27 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
     _selectedTracks.addAll(
       (_book?.tracks ?? const <StoryTrack>[]).take(2).map((track) => track.id),
     );
+    _openRequestedEvent();
+  }
+
+  @override
+  void didUpdateWidget(StoryPlanningPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _openRequestedEvent();
+  }
+
+  void _openRequestedEvent() {
+    final id = widget.controller.requestedStoryEventId;
+    if (id == null) return;
+    final event = _book?.events.where((event) => event.id == id).firstOrNull;
+    if (event == null) return;
+    widget.controller.requestedStoryEventId = null;
+    _tool = _PlotTool.structure;
+    _view = _StoryView.axis;
+    _selectedTracks.addAll(event.trackIds);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showEventPreview(context, event);
+    });
   }
 
   @override
@@ -1400,51 +1463,69 @@ class _StoryPlanningPageState extends State<StoryPlanningPage> {
       context: context,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(event.title, style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Text(
-              event.storyDate,
-              style: TextStyle(color: Theme.of(context).colorScheme.primary),
-            ),
-            if (event.description.isNotEmpty) ...[
-              const SizedBox(height: 14),
-              Text(event.description),
-            ],
-            if (event.persons.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Text('参与角色 · ${event.persons}'),
-            ],
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(context);
-                      _showEventDialog(context, existing: event);
-                    },
-                    icon: const Icon(Icons.edit_outlined),
-                    label: const Text('编辑事件'),
+      isScrollControlled: true,
+      builder: (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .72,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  key: ValueKey('event-preview-scroll-${event.id}'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        event.title,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        event.storyDate,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                      if (event.description.isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        Text(event.description),
+                      ],
+                      if (event.persons.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        Text('参与角色 · ${event.persons}'),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(width: 10),
-                IconButton.outlined(
-                  tooltip: '删除事件',
-                  onPressed: () {
-                    widget.controller.deleteEvent(event.id);
-                    Navigator.pop(context);
-                  },
-                  icon: const Icon(Icons.delete_outline_rounded),
-                ),
-              ],
-            ),
-          ],
+              ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _showEventDialog(context, existing: event);
+                      },
+                      icon: const Icon(Icons.edit_outlined),
+                      label: const Text('编辑事件'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  IconButton.outlined(
+                    tooltip: '删除事件',
+                    onPressed: () {
+                      widget.controller.deleteEvent(event.id);
+                      Navigator.pop(context);
+                    },
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2423,7 +2504,9 @@ class _MobileTimelineCanvas extends StatelessWidget {
     const leftGutter = 54.0;
     const laneWidth = 146.0;
     const top = 56.0;
-    const rowHeight = 108.0;
+    final nodeHeight = 18 + MediaQuery.textScalerOf(context).scale(84);
+    final laneStep = nodeHeight + 8;
+    final rowHeight = laneStep + 18;
     final rows = <int, List<StoryEvent>>{};
     for (final event in events) {
       rows.putIfAbsent(event.timeLevel, () => []).add(event);
@@ -2441,7 +2524,7 @@ class _MobileTimelineCanvas extends StatelessWidget {
             .length;
         if (count > maxLaneEvents) maxLaneEvents = count;
       }
-      final requiredHeight = maxLaneEvents * 90.0 + 18;
+      final requiredHeight = maxLaneEvents * laneStep + 18;
       return requiredHeight > rowHeight ? requiredHeight : rowHeight;
     }).toList();
     final rowOffsets = <double>[];
@@ -2541,9 +2624,9 @@ class _MobileTimelineCanvas extends StatelessWidget {
                             widgets.add(
                               Positioned(
                                 left: leftGutter + trackIndex * laneWidth + 7,
-                                top: topOffset + 5 + laneEventIndex * 90,
+                                top: topOffset + 5 + laneEventIndex * laneStep,
                                 width: laneWidth - 14,
-                                height: 82,
+                                height: nodeHeight,
                                 child: _TimelineEventNode(
                                   event: event,
                                   color: _trackColor(track.color),

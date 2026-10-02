@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:yejian_native/data/local_store.dart';
@@ -45,6 +46,37 @@ class _MemorySaver implements DocumentSaver {
     name = suggestedName;
     return DocumentSaveResult.saved(suggestedName);
   }
+}
+
+Uint8List _oldZip(LibraryData data, int version) {
+  final content = Uint8List.fromList(
+    utf8.encode(
+      jsonEncode({
+        'profile': data.profile.toJson()..['avatarPath'] = null,
+        'books': [
+          for (final book in data.books) book.toJson()..['coverPath'] = null,
+        ],
+      }),
+    ),
+  );
+  return ZipEncoder().encodeBytes(
+    Archive()
+      ..add(ArchiveFile.bytes('content.json', content))
+      ..add(
+        ArchiveFile.bytes(
+          'manifest.json',
+          utf8.encode(
+            jsonEncode({
+              'format': ProjectArchive.format,
+              'formatVersion': version,
+              'kind': data.books.length == 1 ? 'book' : 'collection',
+              'contentSha256': sha256.convert(content).toString(),
+              'assets': <String, dynamic>{},
+            }),
+          ),
+        ),
+      ),
+  );
 }
 
 void main() {
@@ -141,24 +173,29 @@ void main() {
       profile: data.profile,
       isCollection: false,
     );
-    final oldZip = Archive();
-    for (final file in ZipDecoder().decodeBytes(bytes)) {
-      final contents = file.readBytes()!;
-      if (file.name == 'manifest.json') {
-        final manifest =
-            jsonDecode(utf8.decode(contents)) as Map<String, dynamic>;
-        manifest['formatVersion'] = 1;
-        oldZip.add(
-          ArchiveFile.bytes(file.name, utf8.encode(jsonEncode(manifest))),
-        );
-      } else {
-        oldZip.add(ArchiveFile.bytes(file.name, contents));
-      }
-    }
+    final paths = ZipDecoder()
+        .decodeBytes(bytes)
+        .map((file) => file.name)
+        .toList();
+    expect(paths, isNot(contains('content.json')));
     expect(
-      ProjectArchive.decode(ZipEncoder().encodeBytes(oldZip)).books.single.id,
-      data.books.first.id,
+      paths,
+      containsAll([
+        'library.json',
+        'profile.json',
+        'books/0/book.json',
+        'books/0/roles.json',
+        'books/0/worlds.json',
+        'books/0/story.json',
+        'books/0/chapters/0.json',
+      ]),
     );
+    for (final version in [1, 2]) {
+      expect(
+        ProjectArchive.decode(_oldZip(data, version)).books.single.toJson(),
+        data.books.first.toJson(),
+      );
+    }
 
     final image = File('${temporary.path}${Platform.pathSeparator}scene.png');
     await image.writeAsBytes([0x89, 0x50, 0x4e, 0x47]);
@@ -214,7 +251,7 @@ void main() {
       altered.add(
         ArchiveFile.bytes(
           file.name,
-          file.name == 'content.json'
+          file.name == 'books/0/chapters/0.json'
               ? utf8.encode('{"profile":{},"books":[]}')
               : file.readBytes()!,
         ),

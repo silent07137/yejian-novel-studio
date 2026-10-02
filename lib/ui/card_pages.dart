@@ -102,6 +102,7 @@ class _RoleDetailPageState extends State<RoleDetailPage> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.embedded,
+        toolbarHeight: widget.embedded ? 44 : kToolbarHeight,
         title: Text(_role.name),
         actions: [
           IconButton(
@@ -815,6 +816,7 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.embedded,
+        toolbarHeight: widget.embedded ? 44 : kToolbarHeight,
         title: const Text('世界观详情'),
         actions: [
           if (!widget.embedded)
@@ -839,7 +841,9 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 32),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
+              constraints: BoxConstraints(
+                maxWidth: widget.embedded ? double.infinity : 680,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -859,7 +863,8 @@ class _WorldDetailPageState extends State<WorldDetailPage> {
                               _world.title,
                               style: Theme.of(context).textTheme.headlineMedium,
                             ),
-                            if (_world.description.isNotEmpty) ...[
+                            if (!widget.embedded &&
+                                _world.description.isNotEmpty) ...[
                               const SizedBox(height: 8),
                               Text(
                                 _world.description,

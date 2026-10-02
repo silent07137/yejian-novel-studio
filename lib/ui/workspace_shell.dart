@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter/rendering.dart' show RenderEditable, ScrollDirection;
 import 'package:flutter/services.dart';
 
@@ -17,6 +16,10 @@ import 'ai_settings_dialog.dart';
 import 'ai_editor_sheet.dart';
 import 'book_management.dart';
 import 'book_pages.dart';
+import 'card_pages.dart';
+import 'chapter_markdown_preview.dart';
+import 'chapter_dialogs.dart';
+import 'writing_reference_pane.dart';
 
 class WorkspaceShell extends StatefulWidget {
   const WorkspaceShell({super.key, required this.controller});
@@ -791,10 +794,20 @@ class _WorkspaceBody extends StatefulWidget {
 
 class _WorkspaceBodyState extends State<_WorkspaceBody> {
   final PageStorageBucket _pageStorage = PageStorageBucket();
+  String? _loadKey;
+  Future<void>? _loadFuture;
 
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final loadKey =
+        '${controller.page.name}:${controller.selectedBookId}:${controller.selectedChapterId}';
+    if (_loadKey != loadKey) {
+      _loadKey = loadKey;
+      _loadFuture = controller.workspaceNeedsLoading
+          ? controller.prepareWorkspace()
+          : null;
+    }
     final content = switch (controller.page) {
       WorkspacePage.home => HomePage(controller: controller),
       WorkspacePage.bookOverview => BookOverviewPage(controller: controller),
@@ -837,7 +850,38 @@ class _WorkspaceBodyState extends State<_WorkspaceBody> {
               ),
               child: KeyedSubtree(
                 key: PageStorageKey(controller.page),
-                child: content,
+                child: _loadFuture == null
+                    ? content
+                    : FutureBuilder<void>(
+                        future: _loadFuture,
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState !=
+                              ConnectionState.done) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          }
+                          if (snapshot.hasError) {
+                            return Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Text('内容加载失败，请重试'),
+                                  const SizedBox(height: 12),
+                                  FilledButton(
+                                    onPressed: () => setState(() {
+                                      _loadFuture = controller
+                                          .prepareWorkspace();
+                                    }),
+                                    child: const Text('重试'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                          return content;
+                        },
+                      ),
               ),
             ),
           ),
@@ -929,10 +973,17 @@ class _TopBar extends StatelessWidget {
         ? [
             IconButton(
               tooltip: '在本书中搜索',
-              onPressed: () => showSearch<void>(
-                context: context,
-                delegate: _WorkspaceSearchDelegate(controller),
-              ),
+              onPressed: () async {
+                final book = controller.activeBook;
+                if (book != null) {
+                  await controller.ensureBookSections(book, BookSection.values);
+                }
+                if (!context.mounted) return;
+                await showSearch<void>(
+                  context: context,
+                  delegate: _WorkspaceSearchDelegate(controller),
+                );
+              },
               icon: const Icon(Icons.search_rounded),
             ),
             PopupMenuButton<WorkspacePage>(
@@ -982,6 +1033,7 @@ class _WorkspaceSearchDelegate extends SearchDelegate<void> {
           title: item.name,
           subtitle: '角色 · ${item.identity}',
           page: WorkspacePage.characters,
+          role: item,
         ),
       ),
       ...book.worlds.map(
@@ -989,6 +1041,7 @@ class _WorkspaceSearchDelegate extends SearchDelegate<void> {
           title: item.title,
           subtitle: '世界观 · ${item.type}',
           page: WorkspacePage.characters,
+          world: item,
         ),
       ),
       ...book.events.map(
@@ -996,6 +1049,7 @@ class _WorkspaceSearchDelegate extends SearchDelegate<void> {
           title: item.title,
           subtitle: '事件 · ${item.storyDate}',
           page: WorkspacePage.timeline,
+          eventId: item.id,
         ),
       ),
     ];
@@ -1046,7 +1100,34 @@ class _WorkspaceSearchDelegate extends SearchDelegate<void> {
           subtitle: Text(item.subtitle),
           trailing: const Icon(Icons.chevron_right_rounded),
           onTap: () {
+            final navigator = Navigator.of(context);
             close(context, null);
+            if (item.role != null) {
+              navigator.push(
+                MaterialPageRoute<void>(
+                  builder: (_) => RoleDetailPage(
+                    initialRole: item.role!,
+                    controller: controller,
+                  ),
+                ),
+              );
+              return;
+            }
+            if (item.world != null) {
+              navigator.push(
+                MaterialPageRoute<void>(
+                  builder: (_) => WorldDetailPage(
+                    initialWorld: item.world!,
+                    controller: controller,
+                  ),
+                ),
+              );
+              return;
+            }
+            if (item.eventId != null) {
+              controller.openStoryEvent(item.eventId!);
+              return;
+            }
             if (item.chapterId != null) {
               controller.selectChapter(item.chapterId!);
             }
@@ -1074,12 +1155,18 @@ class _WorkspaceSearchEntry {
     required this.subtitle,
     required this.page,
     this.chapterId,
+    this.role,
+    this.world,
+    this.eventId,
   });
 
   final String title;
   final String subtitle;
   final WorkspacePage page;
   final String? chapterId;
+  final RoleCard? role;
+  final WorldCard? world;
+  final String? eventId;
 }
 
 class _SaveIndicator extends StatelessWidget {
@@ -1775,7 +1862,12 @@ class WritingPage extends StatelessWidget {
                       ),
               ),
             ),
-            if (showNotes) _WritingNotes(book: book, chapter: chapter),
+            if (showNotes)
+              WritingReferencePane(
+                book: book,
+                chapter: chapter,
+                controller: controller,
+              ),
           ],
         );
       },
@@ -2126,6 +2218,8 @@ class _EditorPaneState extends State<_EditorPane> {
   late final FocusNode _bodyFocusNode;
   late final UndoHistoryController _undoController;
   late final ScrollController _bodyScrollController;
+  final ScrollController _previewScrollController = ScrollController();
+  bool _syncingFields = false;
   final GlobalKey _bodyFieldKey = GlobalKey();
   bool _showParagraphNumbers = false;
   bool _markerPreviewOpen = false;
@@ -2149,15 +2243,127 @@ class _EditorPaneState extends State<_EditorPane> {
   }
 
   void _commitTitleWhenCompositionEnds() {
+    if (_syncingFields ||
+        widget.controller.activeChapter?.id != widget.chapter.id) {
+      return;
+    }
     final composing = _titleController.value.composing;
     if (composing.isValid && !composing.isCollapsed) return;
     widget.controller.updateChapterTitle(_titleController.text);
   }
 
   void _commitBodyWhenCompositionEnds() {
+    if (_syncingFields ||
+        widget.controller.activeChapter?.id != widget.chapter.id) {
+      return;
+    }
     final composing = _bodyController.value.composing;
     if (composing.isValid && !composing.isCollapsed) return;
     widget.controller.updateChapterBody(_bodyController.text);
+  }
+
+  @override
+  void didUpdateWidget(_EditorPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncingFields = true;
+    try {
+      _syncField(_titleController, widget.chapter.title);
+      _syncField(_bodyController, widget.chapter.body);
+    } finally {
+      _syncingFields = false;
+    }
+  }
+
+  void _syncField(TextEditingController field, String text) {
+    if (field.text == text ||
+        (field.value.composing.isValid && !field.value.composing.isCollapsed)) {
+      return;
+    }
+    final selection = field.selection;
+    field.value = TextEditingValue(
+      text: text,
+      selection: selection.isValid
+          ? TextSelection(
+              baseOffset: selection.baseOffset.clamp(0, text.length),
+              extentOffset: selection.extentOffset.clamp(0, text.length),
+            )
+          : TextSelection.collapsed(offset: text.length),
+    );
+  }
+
+  void _toggleMarkdownPreview() {
+    if (!_markdownPreview) {
+      _onBodyScroll();
+      FocusScope.of(context).unfocus();
+    }
+    setState(() => _markdownPreview = !_markdownPreview);
+    if (!_markdownPreview) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_bodyScrollController.hasClients) return;
+        _bodyScrollController.jumpTo(
+          widget.controller
+              .editorScrollOffset(widget.chapter.id)
+              .clamp(0, _bodyScrollController.position.maxScrollExtent),
+        );
+      });
+    }
+  }
+
+  Future<void> _editChapterImage(ChapterImage image) async {
+    final result = await showDialog<({String alt, double width})>(
+      context: context,
+      builder: (_) => ChapterImageDialog(image: image),
+    );
+    if (result != null && mounted) {
+      final previewOffset = _previewScrollController.hasClients
+          ? _previewScrollController.offset
+          : null;
+      widget.controller.updateChapterImage(
+        image.id,
+        alt: result.alt,
+        widthFactor: result.width,
+      );
+      if (previewOffset != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _previewScrollController.hasClients) {
+            _previewScrollController.jumpTo(
+              previewOffset.clamp(
+                0,
+                _previewScrollController.position.maxScrollExtent,
+              ),
+            );
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _manageChapterImages() async {
+    final image = await showModalBottomSheet<ChapterImage>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .6,
+        child: widget.chapter.images.isEmpty
+            ? const Center(child: Text('本章还没有插入图片'))
+            : ListView(
+                children: [
+                  for (final image in widget.chapter.images)
+                    ListTile(
+                      title: Text(image.alt.isEmpty ? '未命名图片' : image.alt),
+                      subtitle: Text(
+                        '宽度 ${(image.widthFactor * 100).round()}%',
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => Navigator.pop(context, image),
+                    ),
+                ],
+              ),
+      ),
+    );
+    if (image != null && mounted) await _editChapterImage(image);
   }
 
   void _wrapMarkdown(String before, String after, String placeholder) {
@@ -2215,6 +2421,8 @@ class _EditorPaneState extends State<_EditorPane> {
         _wrapMarkdown('`', '`', '代码');
       case 'image':
         _insertChapterImage();
+      case 'images':
+        _manageChapterImages();
     }
   }
 
@@ -3129,6 +3337,7 @@ class _EditorPaneState extends State<_EditorPane> {
     _bodyFocusNode.dispose();
     _undoController.dispose();
     _bodyScrollController.dispose();
+    _previewScrollController.dispose();
     _titleController.dispose();
     _bodyController.dispose();
     super.dispose();
@@ -3205,7 +3414,7 @@ class _EditorPaneState extends State<_EditorPane> {
                       onPressed: _aiBusy ? null : _openAiSheet,
                       icon: const Icon(Icons.auto_awesome_outlined),
                     ),
-                      if (paneConstraints.maxWidth >= 456)
+                    if (paneConstraints.maxWidth >= 456)
                       Text(
                         '${widget.chapter.wordCount} 字',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -3225,6 +3434,7 @@ class _EditorPaneState extends State<_EditorPane> {
                         PopupMenuItem(value: 'code', child: Text('行内代码')),
                         PopupMenuDivider(),
                         PopupMenuItem(value: 'image', child: Text('插入图片')),
+                        PopupMenuItem(value: 'images', child: Text('图片设置')),
                       ],
                     ),
                     IconButton(
@@ -3235,17 +3445,14 @@ class _EditorPaneState extends State<_EditorPane> {
                         height: 44,
                       ),
                       padding: EdgeInsets.zero,
-                      onPressed: () {
-                        if (!_markdownPreview) FocusScope.of(context).unfocus();
-                        setState(() => _markdownPreview = !_markdownPreview);
-                      },
+                      onPressed: _toggleMarkdownPreview,
                       icon: Icon(
                         _markdownPreview
                             ? Icons.edit_outlined
                             : Icons.visibility_outlined,
                       ),
                     ),
-                      if (paneConstraints.maxWidth >= 376)
+                    if (paneConstraints.maxWidth >= 376)
                       IconButton(
                         key: const ValueKey('add-chapter-marker'),
                         tooltip: '添加标注',
@@ -3330,6 +3537,7 @@ class _EditorPaneState extends State<_EditorPane> {
                   child: Column(
                     children: [
                       TextField(
+                        key: const ValueKey('chapter-title-field'),
                         controller: _titleController,
                         style: Theme.of(context).textTheme.headlineMedium,
                         decoration: const InputDecoration(
@@ -3344,62 +3552,14 @@ class _EditorPaneState extends State<_EditorPane> {
                       const SizedBox(height: 18),
                       Expanded(
                         child: _markdownPreview
-                            ? SingleChildScrollView(
+                            ? ChapterMarkdownPreview(
                                 key: const ValueKey('markdown-preview'),
-                                child: MarkdownBody(
-                                  data: _bodyController.text,
-                                  selectable: true,
-                                  softLineBreak: true,
-                                  styleSheet:
-                                      MarkdownStyleSheet.fromTheme(
-                                        Theme.of(context),
-                                      ).copyWith(
-                                        p: TextStyle(
-                                          fontSize: settings.fontSize,
-                                          height: settings.lineHeight,
-                                        ),
-                                      ),
-                                  imageBuilder: (uri, title, alt) {
-                                    if (uri.scheme != 'yejian-image') {
-                                      return Text('外部图片暂不预览：${alt ?? uri}');
-                                    }
-                                    final image = widget.chapter.images
-                                        .where((item) => item.id == uri.path)
-                                        .firstOrNull;
-                                    if (image == null || image.path.isEmpty) {
-                                      return const Text('〔图片文件未找到〕');
-                                    }
-                                    return Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Image.file(
-                                            File(image.path),
-                                            fit: BoxFit.contain,
-                                            errorBuilder: (_, _, _) =>
-                                                const Text('〔图片无法读取〕'),
-                                          ),
-                                          if ((alt ?? image.alt).isNotEmpty)
-                                            Padding(
-                                              padding: const EdgeInsets.only(
-                                                top: 6,
-                                              ),
-                                              child: Text(
-                                                alt ?? image.alt,
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodySmall,
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    );
-                                  },
-                                ),
+                                chapter: widget.chapter,
+                                body: _bodyController.text,
+                                scrollController: _previewScrollController,
+                                fontSize: settings.fontSize,
+                                lineHeight: settings.lineHeight,
+                                onImageTap: _editChapterImage,
                               )
                             : LayoutBuilder(
                                 builder: (context, constraints) {
@@ -3558,53 +3718,6 @@ class _EditorKeyboardToolbar extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _WritingNotes extends StatelessWidget {
-  const _WritingNotes({required this.book, required this.chapter});
-
-  final Book book;
-  final Chapter? chapter;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 260,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
-      child: ListView(
-        children: [
-          const Text('本章笔记', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 14),
-          Text(
-            chapter?.summary.isNotEmpty == true
-                ? chapter!.summary
-                : '还没有填写章节目标。',
-          ),
-          const SizedBox(height: 28),
-          const Text('出场角色', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 10),
-          ...book.roles
-              .take(4)
-              .map(
-                (role) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(
-                    radius: 14,
-                    child: Text(role.name.characters.first),
-                  ),
-                  title: Text(role.name),
-                  subtitle: Text(role.identity),
-                ),
-              ),
-        ],
       ),
     );
   }
@@ -5313,7 +5426,7 @@ class AboutPage extends StatelessWidget {
 
   final Future<bool> Function(Uri) openLink;
 
-  static const _version = '0.4.0-dev.32 (32)';
+  static const _version = '0.4.0-dev.33 (33)';
   static const _applicationId = 'com.silent07137.yejian_native';
   static final Uri _projectUri = Uri.parse(
     'https://github.com/silent07137/yejian-novel-studio',
@@ -5340,6 +5453,10 @@ class AboutPage extends StatelessWidget {
         title: const Text('版本历史'),
         content: const SingleChildScrollView(
           child: Text(
+            '0.4.0-dev.33\n'
+            '· Windows 与 Android 同步发布，修复桌面启动、图标和安装目录\n'
+            '· 工程备份分文件压缩，正文与设定按需读取，保留旧版导入\n'
+            '· 修复章节标题、笔记、搜索详情和长文预览，插图尺寸即时更新\n\n'
             '0.4.0-dev.32\n'
             '· 平板改用左侧窄导航，写作页支持目录与正文分栏\n'
             '· 设定页支持角色卡、世界观的列表与详情分栏\n'

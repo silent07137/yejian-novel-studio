@@ -1,5 +1,5 @@
-name: Android Beta
-run-name: Android Beta ${{ inputs.tag || github.ref_name }}
+name: Windows & Android Beta
+run-name: Windows & Android Beta ${{ inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -8,36 +8,41 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 预发布标签（必须与 pubspec.yaml 版本一致，例如 v0.4.0-dev.32）
+        description: 已推送的预发布标签（例如 v0.4.0-dev.33）
         required: true
-        default: v0.4.0-dev.32
+        default: v0.4.0-dev.33
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: android-beta-${{ inputs.tag || github.ref_name }}
+  group: desktop-mobile-beta-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  build-and-release:
-    name: Build and publish prerelease
+  validate:
+    name: Validate and test source
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      build: ${{ steps.release.outputs.build }}
     env:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/yejian-release.jks
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Validate release tag
+        id: release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           app_version="$(awk '/^version:/ {print $2}' pubspec.yaml)"
           version_name="${app_version%%+*}"
@@ -51,6 +56,50 @@ jobs:
             echo "::error::缺少预发布说明：$notes_path"
             exit 1
           fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::该版本已有 Release，不覆盖现有发行包"
+            exit 1
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "build=${app_version##*+}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-pub
+
+      - name: Test
+        run: flutter test --no-pub
+
+  android:
+    name: Build signed Android APK
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_BUILD: ${{ needs.validate.outputs.build }}
+      YEJIAN_LOCAL_TEST: 'false'
+      ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android/yejian-release.jks
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -90,16 +139,10 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze
-        run: flutter analyze
-
-      - name: Test
-        run: flutter test
-
       - name: Build signed APK
         run: flutter build apk --release --no-pub
 
-      - name: Verify APK signature
+      - name: Verify APK signature and identity
         shell: bash
         run: |
           apksigner_path="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
@@ -107,7 +150,22 @@ jobs:
             echo "::error::Android SDK 中没有找到 apksigner"
             exit 1
           fi
-          "$apksigner_path" verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
+          apk_path=build/app/outputs/flutter-apk/app-release.apk
+          certs="$("$apksigner_path" verify --verbose --print-certs "$apk_path")"
+          printf '%s\n' "$certs"
+          if grep -qi 'CN=Android Debug' <<< "$certs"; then
+            echo "::error::拒绝发布调试密钥签名的 APK"
+            exit 1
+          fi
+          aapt_path="$(dirname "$apksigner_path")/aapt"
+          badging="$("$aapt_path" dump badging "$apk_path")"
+          identity="${badging%%$'\n'*}"
+          if [[ "$identity" != *"name='com.silent07137.yejian_native'"* ]] ||
+             [[ "$identity" != *"versionName='$RELEASE_VERSION'"* ]] ||
+             [[ "$identity" != *"versionCode='$RELEASE_BUILD'"* ]]; then
+            echo "::error::APK 包名或版本不符合正式发行配置"
+            exit 1
+          fi
 
       - name: Prepare release files
         shell: bash
@@ -120,12 +178,101 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yejian-${{ inputs.tag || github.ref_name }}-android
+          name: yejian-${{ needs.validate.outputs.tag }}-android
           path: |
             dist/*.apk
             dist/*.sha256
           if-no-files-found: error
           retention-days: 14
+
+  windows:
+    name: Build Windows x64 MSI
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out validated source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Test Windows data paths and regressions
+        run: flutter test --no-pub
+
+      - name: Build Windows application
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enable Windows desktop.' }
+          & ./tool/build_windows_icon.ps1
+          flutter build windows --release --no-pub
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
+
+      - name: Build MSI and prepare release files
+        shell: pwsh
+        run: |
+          $wixBin = Split-Path (Get-Command candle.exe -ErrorAction Stop).Source
+          $wixVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $wixBin 'candle.exe')).FileVersion
+          if ($wixVersion -notlike '3.14.*') { throw "Expected WiX 3.14, found $wixVersion" }
+          & ./tool/build_windows_msi.ps1 -WixRoot $wixBin
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $msiName = "yejian-$env:RELEASE_TAG-windows-x64.msi"
+          Copy-Item -LiteralPath "build/installer/yejian_$($env:RELEASE_VERSION)_x64.msi" -Destination "dist/$msiName"
+          $checksum = (Get-FileHash -LiteralPath "dist/$msiName" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$checksum  $msiName" | Set-Content -LiteralPath "dist/$msiName.sha256" -Encoding utf8NoBOM
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yejian-${{ needs.validate.outputs.tag }}-windows
+          path: |
+            dist/*.msi
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish both platforms together
+    needs: [validate, android, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out validated release notes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: yejian-${{ needs.validate.outputs.tag }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify both release files
+        shell: bash
+        run: |
+          test -s "dist/yejian-${RELEASE_TAG}-android.apk"
+          test -s "dist/yejian-${RELEASE_TAG}-windows-x64.msi"
+          (cd dist && sha256sum --check --strict ./*.sha256)
 
       - name: Publish GitHub prerelease
         shell: bash
@@ -133,12 +280,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           apk_path="dist/yejian-${RELEASE_TAG}-android.apk"
+          msi_path="dist/yejian-${RELEASE_TAG}-windows-x64.msi"
           gh release create "$RELEASE_TAG" \
             "$apk_path#Android APK" \
-            "$apk_path.sha256#SHA-256" \
+            "$apk_path.sha256#Android SHA-256" \
+            "$msi_path#Windows x64 MSI" \
+            "$msi_path.sha256#Windows SHA-256" \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --verify-tag \
             --title "页间 ${RELEASE_TAG}" \
             --notes-file "docs/releases/${RELEASE_TAG}.md" \
+            --draft \
             --prerelease \
             --latest=false
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false

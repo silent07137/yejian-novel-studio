@@ -46,7 +46,7 @@ class ProjectArchiveData {
 /// extracted directly to disk; only validated, named assets are restored.
 class ProjectArchive {
   static const format = 'yejian-project';
-  static const version = 2;
+  static const version = 3;
   static const maxArchiveBytes = 128 * 1024 * 1024;
   static const maxContentBytes = 64 * 1024 * 1024;
   static const maxAssetBytes = 32 * 1024 * 1024;
@@ -60,6 +60,9 @@ class ProjectArchive {
     if (books.isEmpty || !isCollection && books.length != 1) {
       throw const ProjectArchiveException('工程文件至少需要一本书；单书工程只能包含一本书');
     }
+    if (books.length > 1000) {
+      throw const ProjectArchiveException('工程包含过多作品，最多支持 1000 本');
+    }
     final ids = books.map((book) => book.id).toList();
     if (ids.any((id) => id.isEmpty) || ids.toSet().length != ids.length) {
       throw const ProjectArchiveException('书架中存在无效或重复的作品 ID');
@@ -69,6 +72,9 @@ class ProjectArchive {
     final bookPayloads = <Map<String, dynamic>>[];
     final imageIds = <String>{};
     for (final (index, book) in books.indexed) {
+      if (!book.fullyLoaded) {
+        throw const ProjectArchiveException('作品尚未加载完整，请稍后再导出');
+      }
       final payload = book.toJson()..['coverPath'] = null;
       final chapters = payload['chapters'] as List<dynamic>;
       for (final (chapterIndex, chapter) in book.chapters.indexed) {
@@ -116,15 +122,55 @@ class ProjectArchive {
         'extension': extension,
       };
     }
-    final content = Uint8List.fromList(
-      utf8.encode(
-        jsonEncode({'profile': profilePayload, 'books': bookPayloads}),
-      ),
-    );
-    if (content.length > maxContentBytes) {
-      throw const ProjectArchiveException('工程正文超过 64 MB，暂不支持导出');
+    final parts = <String, Map<String, dynamic>>{};
+    var contentSize = 0;
+    String writePart(String path, Object value) {
+      final bytes = Uint8List.fromList(utf8.encode(jsonEncode(value)));
+      contentSize += bytes.length;
+      if (contentSize > maxContentBytes) {
+        throw const ProjectArchiveException('工程正文超过 64 MB，暂不支持导出');
+      }
+      parts[path] = {'sha256': _hash(bytes), 'size': bytes.length};
+      archive.add(ArchiveFile.bytes(path, bytes));
+      return path;
     }
-    archive.add(ArchiveFile.bytes('content.json', content));
+
+    final bookIndex = <Map<String, dynamic>>[];
+    for (final (index, original) in bookPayloads.indexed) {
+      final payload = Map<String, dynamic>.from(original);
+      final root = 'books/$index';
+      final chapterPaths = <String>[];
+      final chapters = payload.remove('chapters') as List<dynamic>;
+      for (final (chapterIndex, chapter) in chapters.indexed) {
+        chapterPaths.add(
+          writePart('$root/chapters/$chapterIndex.json', chapter),
+        );
+      }
+      Map<String, dynamic> take(List<String> keys) => {
+        for (final key in keys) key: payload.remove(key),
+      };
+      bookIndex.add({
+        'chapters': chapterPaths,
+        'volumes': writePart('$root/volumes.json', {
+          'volumes': payload.remove('volumes'),
+        }),
+        'roles': writePart(
+          '$root/roles.json',
+          take(['roles', 'roleFields', 'roleBaseFields']),
+        ),
+        'worlds': writePart(
+          '$root/worlds.json',
+          take(['worlds', 'worldFields', 'worldBaseFields']),
+        ),
+        'story': writePart(
+          '$root/story.json',
+          take(['tracks', 'events', 'storyLinks', 'clues', 'notes']),
+        ),
+        'metadata': writePart('$root/book.json', payload),
+      });
+    }
+    writePart('profile.json', profilePayload);
+    writePart('library.json', {'profile': 'profile.json', 'books': bookIndex});
     final manifest = Uint8List.fromList(
       utf8.encode(
         jsonEncode({
@@ -132,12 +178,18 @@ class ProjectArchive {
           'formatVersion': version,
           'kind': isCollection ? 'collection' : 'book',
           'exportedAt': DateTime.now().toUtc().toIso8601String(),
-          'contentSha256': _hash(content),
+          'files': parts,
           'assets': assets,
         }),
       ),
     );
     archive.add(ArchiveFile.bytes('manifest.json', manifest));
+    if (manifest.length > 4 * 1024 * 1024 ||
+        archive.length > 20000 ||
+        archive.fold<int>(0, (sum, file) => sum + file.size) >
+            maxExpandedBytes) {
+      throw const ProjectArchiveException('工程条目过多或解压后超过 256 MB，暂不支持导出');
+    }
     final encoded = ZipEncoder().encodeBytes(archive);
     if (encoded.length > maxArchiveBytes) {
       throw const ProjectArchiveException('工程文件超过 128 MB，暂不支持导出');
@@ -160,7 +212,7 @@ class ProjectArchive {
     try {
       // Inspect declared sizes before asking the decoder to expand content.
       final archive = ZipDecoder().decodeBytes(bytes);
-      if (archive.length > 1000) {
+      if (archive.length > 20000) {
         throw const ProjectArchiveException('工程文件包含过多条目');
       }
       final files = <String, ArchiveFile>{};
@@ -184,13 +236,15 @@ class ProjectArchive {
         }
         files[file.name] = file;
       }
-      final manifestBytes = _entry(files, 'manifest.json', 1024 * 1024);
+      final manifestBytes = _entry(files, 'manifest.json', 4 * 1024 * 1024);
       final manifest = _jsonMap(manifestBytes, '工程清单');
       if (manifest['format'] != format) {
         throw const ProjectArchiveException('不是页间工程文件');
       }
       final formatVersion = manifest['formatVersion'];
-      if (formatVersion != 1 && formatVersion != version) {
+      if (formatVersion is! int ||
+          formatVersion < 1 ||
+          formatVersion > version) {
         throw const ProjectArchiveException('工程格式版本不受支持，请更新应用');
       }
       final kind = manifest['kind'];
@@ -198,11 +252,18 @@ class ProjectArchive {
         throw const ProjectArchiveException('工程类型无效');
       }
       final isCollection = kind == 'collection';
-      final contentBytes = _entry(files, 'content.json', maxContentBytes);
-      if (_hash(contentBytes) != manifest['contentSha256']) {
-        throw const ProjectArchiveException('工程内容校验失败');
+      final referencedFiles = <String>{'manifest.json'};
+      final Map<String, dynamic> content;
+      if (formatVersion == 3) {
+        content = _decodeParts(files, manifest, referencedFiles);
+      } else {
+        final contentBytes = _entry(files, 'content.json', maxContentBytes);
+        if (_hash(contentBytes) != manifest['contentSha256']) {
+          throw const ProjectArchiveException('工程内容校验失败');
+        }
+        content = _jsonMap(contentBytes, '工程内容');
+        referencedFiles.add('content.json');
       }
-      final content = _jsonMap(contentBytes, '工程内容');
       final books = _booksFromContent(content, isCollection: isCollection);
       final profileJson = content['profile'];
       if (profileJson is! Map<String, dynamic>) {
@@ -233,7 +294,6 @@ class ProjectArchive {
       if (formatVersion == 1 && imageIds.isNotEmpty) {
         throw const ProjectArchiveException('旧版工程包含不受支持的正文图片');
       }
-      final referencedFiles = <String>{'manifest.json', 'content.json'};
       for (final entry in assetsJson.entries) {
         final description = entry.value;
         if (description is! Map<String, dynamic>) {
@@ -261,7 +321,7 @@ class ProjectArchive {
           covers[bookId] = asset;
           coverExtensions[bookId] = extension;
         } else if (entry.key.startsWith('image:') &&
-            formatVersion == version &&
+            formatVersion >= 2 &&
             imageIds.contains(entry.key.substring(6))) {
           final imageId = entry.key.substring(6);
           chapterImages[imageId] = asset;
@@ -292,6 +352,75 @@ class ProjectArchive {
     } on Object {
       throw const ProjectArchiveException('工程文件损坏或格式不受支持');
     }
+  }
+
+  static Map<String, dynamic> _decodeParts(
+    Map<String, ArchiveFile> files,
+    Map<String, dynamic> manifest,
+    Set<String> referencedFiles,
+  ) {
+    final descriptions = manifest['files'];
+    if (descriptions is! Map<String, dynamic> || descriptions.length > 20000) {
+      throw const ProjectArchiveException('工程分文件清单无效');
+    }
+    var contentSize = 0;
+    Map<String, dynamic> readPart(Object? path) {
+      if (path is! String ||
+          !path.endsWith('.json') ||
+          !referencedFiles.add(path)) {
+        throw const ProjectArchiveException('工程分文件引用无效或重复');
+      }
+      final description = descriptions[path];
+      if (description is! Map<String, dynamic>) {
+        throw const ProjectArchiveException('工程分文件未登记');
+      }
+      final bytes = _entry(files, path, maxContentBytes);
+      contentSize += bytes.length;
+      if (contentSize > maxContentBytes ||
+          bytes.length != description['size'] ||
+          _hash(bytes) != description['sha256']) {
+        throw const ProjectArchiveException('工程分文件校验失败');
+      }
+      return _jsonMap(bytes, '工程分文件');
+    }
+
+    final index = readPart('library.json');
+    final profile = readPart(index['profile']);
+    final entries = index['books'];
+    if (entries is! List || entries.isEmpty || entries.length > 1000) {
+      throw const ProjectArchiveException('工程作品索引无效');
+    }
+    final books = <Map<String, dynamic>>[];
+    for (final entry in entries) {
+      if (entry is! Map<String, dynamic> || entry['chapters'] is! List) {
+        throw const ProjectArchiveException('工程作品索引无效');
+      }
+      final book = readPart(entry['metadata']);
+      const sectionKeys = {
+        'volumes': ['volumes'],
+        'roles': ['roles', 'roleFields', 'roleBaseFields'],
+        'worlds': ['worlds', 'worldFields', 'worldBaseFields'],
+        'story': ['tracks', 'events', 'storyLinks', 'clues', 'notes'],
+      };
+      for (final section in sectionKeys.entries) {
+        final part = readPart(entry[section.key]);
+        if (part.length != section.value.length ||
+            section.value.any((key) => part[key] is! List)) {
+          throw const ProjectArchiveException('工程分区内容无效');
+        }
+        for (final key in section.value) {
+          book[key] = part[key];
+        }
+      }
+      book['chapters'] = [
+        for (final path in entry['chapters'] as List) readPart(path),
+      ];
+      books.add(book);
+    }
+    if (descriptions.keys.any((path) => !referencedFiles.contains(path))) {
+      throw const ProjectArchiveException('工程包含未使用的分文件');
+    }
+    return {'profile': profile, 'books': books};
   }
 
   static ProjectArchiveData _decodeLegacy(Uint8List bytes) {
@@ -419,3 +548,6 @@ class ProjectArchive {
         : 'bin';
   }
 }
+
+ProjectArchiveData decodeProjectArchive(Uint8List bytes) =>
+    ProjectArchive.decode(bytes);

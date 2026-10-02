@@ -27,6 +27,9 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+// Opt-in local device tests install alongside the user's real app and data.
+// CI and normal builds keep their existing application ID and label.
+val localTestInstall = System.getenv("YEJIAN_LOCAL_TEST") == "true"
 
 android {
     namespace = "com.silent07137.yejian_native"
@@ -40,6 +43,8 @@ android {
 
     defaultConfig {
         applicationId = "com.silent07137.yejian_native"
+        if (localTestInstall) applicationIdSuffix = ".codextest"
+        manifestPlaceholders["applicationLabel"] = if (localTestInstall) "页间（本地测试）" else "页间"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

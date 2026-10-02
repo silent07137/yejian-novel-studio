@@ -83,22 +83,38 @@ class Chapter {
     required this.id,
     required this.title,
     this.volumeId,
-    this.body = '',
+    String body = '',
     this.summary = '',
     this.status = '草稿',
     this.exportEnabled = true,
     this.sortIndex = 0,
     List<ChapterMarker>? markers,
     List<ChapterImage>? images,
+    this.bodyLoaded = true,
+    int? savedWordCount,
     DateTime? updatedAt,
-  }) : markers = markers ?? [],
+    // Keep the public `body` argument while storing prose behind a cache-aware setter.
+    // ignore: prefer_initializing_formals
+  }) : _body = body,
+       _cachedWordCount = savedWordCount,
+       markers = markers ?? [],
        images = images ?? [],
        updatedAt = updatedAt ?? DateTime.now();
 
   String id;
   String title;
   String? volumeId;
-  String body;
+  String _body;
+  int? _cachedWordCount;
+  // Runtime loading state is not part of the portable project format.
+  bool bodyLoaded;
+  String get body => _body;
+  set body(String value) {
+    if (_body != value) _cachedWordCount = null;
+    _body = value;
+    bodyLoaded = true;
+  }
+
   String summary;
   String status;
   bool exportEnabled;
@@ -107,8 +123,8 @@ class Chapter {
   List<ChapterImage> images;
   DateTime updatedAt;
 
-  int get wordCount => countWords(
-    body.replaceAll(RegExp(r'!\[[^\]]*\]\(yejian-image:[A-Za-z0-9-]+\)'), ''),
+  int get wordCount => _cachedWordCount ??= countWords(
+    body.replaceAll(_wordCountImagePattern, ''),
   );
 
   factory Chapter.fromJson(Map<String, dynamic> json) => Chapter(
@@ -134,6 +150,7 @@ class Chapter {
     'title': title,
     'volumeId': volumeId,
     'body': body,
+    'wordCount': wordCount,
     'summary': summary,
     'status': status,
     'exportEnabled': exportEnabled,
@@ -145,19 +162,31 @@ class Chapter {
 }
 
 class ChapterImage {
-  ChapterImage({required this.id, required this.path, this.alt = ''});
+  ChapterImage({
+    required this.id,
+    required this.path,
+    this.alt = '',
+    this.widthFactor = 1,
+  });
 
   String id;
   String path;
   String alt;
+  double widthFactor;
 
   factory ChapterImage.fromJson(Map<String, dynamic> json) => ChapterImage(
     id: json['id'] as String,
     path: json['path'] as String? ?? '',
     alt: json['alt'] as String? ?? '',
+    widthFactor: ((json['widthFactor'] as num?)?.toDouble() ?? 1).clamp(.1, 1),
   );
 
-  Map<String, dynamic> toJson() => {'id': id, 'path': path, 'alt': alt};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'path': path,
+    'alt': alt,
+    'widthFactor': widthFactor,
+  };
 }
 
 /// A bookmark in chapter prose. [start] and [end] use Dart string offsets.
@@ -774,6 +803,8 @@ class IdeaNote {
   Map<String, dynamic> toJson() => {'id': id, 'body': body};
 }
 
+enum BookSection { roles, worlds, story }
+
 class Book {
   Book({
     required this.id,
@@ -793,6 +824,8 @@ class Book {
     List<StoryLink>? storyLinks,
     List<PlotClue>? clues,
     List<IdeaNote>? notes,
+    Set<BookSection>? loadedSections,
+    Map<String, int>? sectionCounts,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) : volumes = volumes ?? [],
@@ -812,6 +845,8 @@ class Book {
        storyLinks = storyLinks ?? [],
        clues = clues ?? [],
        notes = notes ?? [],
+       loadedSections = loadedSections ?? BookSection.values.toSet(),
+       sectionCounts = sectionCounts ?? {},
        createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now() {
     normalizeTimelineEventOrder(this.events);
@@ -834,6 +869,13 @@ class Book {
   List<StoryLink> storyLinks;
   List<PlotClue> clues;
   List<IdeaNote> notes;
+  final Set<BookSection> loadedSections;
+  final Map<String, int> sectionCounts;
+  bool get fullyLoaded =>
+      loadedSections.length == BookSection.values.length &&
+      chapters.every((chapter) => chapter.bodyLoaded);
+  int entityCount(String type, int loadedCount, BookSection section) =>
+      loadedSections.contains(section) ? loadedCount : sectionCounts[type] ?? 0;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -1253,15 +1295,17 @@ class LibraryData {
   }
 }
 
-List<String> _stringList(Object? value) => value is List
-    ? value.map((item) => item.toString()).toList()
-    : const <String>[];
+List<String> _stringList(Object? value) =>
+    value is List ? value.map((item) => item.toString()).toList() : <String>[];
+
+final _wordCountImagePattern = RegExp(
+  r'!\[[^\]]*\]\(yejian-image:[A-Za-z0-9-]+\)',
+);
+final _hanPattern = RegExp(r'[\u3400-\u4DBF\u4E00-\u9FFF]');
+final _latinWordPattern = RegExp(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*");
 
 int countWords(String text) {
-  final han = RegExp(r'[\u3400-\u4DBF\u4E00-\u9FFF]').allMatches(text).length;
-  final nonHan = text.replaceAll(RegExp(r'[\u3400-\u4DBF\u4E00-\u9FFF]'), ' ');
-  final words = RegExp(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
-      .allMatches(nonHan)
-      .length;
+  final han = _hanPattern.allMatches(text).length;
+  final words = _latinWordPattern.allMatches(text).length;
   return han + words;
 }

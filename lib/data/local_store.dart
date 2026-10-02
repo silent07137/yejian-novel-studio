@@ -10,6 +10,13 @@ abstract class DataStore {
   Future<void> save(LibraryData data);
 }
 
+/// Stores that can hydrate metadata-only books without loading the library's
+/// complete prose into memory at startup.
+abstract class SectionedDataStore implements DataStore {
+  Future<void> loadChapter(Book book, Chapter chapter);
+  Future<void> loadSection(Book book, BookSection section);
+}
+
 class LocalStore implements DataStore {
   static const _fileName = 'library.json';
 

@@ -65,10 +65,97 @@ class AppController extends ChangeNotifier {
   String? selectedChapterId;
   String? loadedFontFamily;
   Timer? _saveTimer;
+  Future<void>? _currentSave;
+  int _dataRevision = 0;
+  int _savedRevision = -1;
   bool _disposed = false;
   final List<WorkspacePage> _pageHistory = [];
   final Map<String, double> _editorScrollOffsets = {};
   final Map<String, int> _pageSelections = {};
+  final Map<String, Future<void>> _partLoads = {};
+  String? requestedStoryEventId;
+
+  Future<void> _loadPart(String key, Future<void> Function() load) {
+    return _partLoads.putIfAbsent(
+      key,
+      () => load().whenComplete(() {
+        _partLoads.remove(key);
+      }),
+    );
+  }
+
+  Future<void> ensureChapterLoaded(Book book, Chapter chapter) async {
+    if (chapter.bodyLoaded || store is! SectionedDataStore) return;
+    await _loadPart(
+      'chapter:${chapter.id}',
+      () => (store as SectionedDataStore).loadChapter(book, chapter),
+    );
+  }
+
+  Future<void> ensureBookSections(
+    Book book,
+    Iterable<BookSection> sections,
+  ) async {
+    if (store is! SectionedDataStore) return;
+    await Future.wait([
+      for (final section in sections)
+        if (!book.loadedSections.contains(section))
+          _loadPart(
+            '${book.id}:${section.name}',
+            () => (store as SectionedDataStore).loadSection(book, section),
+          ),
+    ]);
+  }
+
+  Future<void> ensureBookLoaded(Book book) async {
+    await ensureBookSections(book, BookSection.values);
+    for (final chapter in book.chapters) {
+      await ensureChapterLoaded(book, chapter);
+    }
+  }
+
+  Future<void> prepareWorkspace() async {
+    final book = activeBook;
+    if (book == null) return;
+    switch (page) {
+      case WorkspacePage.writing:
+        final chapter = activeChapter;
+        await ensureBookSections(book, BookSection.values);
+        if (chapter != null) await ensureChapterLoaded(book, chapter);
+      case WorkspacePage.characters:
+        await ensureBookSections(book, [BookSection.roles, BookSection.worlds]);
+      case WorkspacePage.timeline:
+        await ensureBookSections(book, [BookSection.roles, BookSection.story]);
+      default:
+        break;
+    }
+  }
+
+  bool get workspaceNeedsLoading {
+    if (store is! SectionedDataStore) return false;
+    final book = activeBook;
+    if (book == null) return false;
+    final sections = switch (page) {
+      WorkspacePage.writing => BookSection.values,
+      WorkspacePage.characters => [BookSection.roles, BookSection.worlds],
+      WorkspacePage.timeline => [BookSection.roles, BookSection.story],
+      _ => <BookSection>[],
+    };
+    return sections.any((section) => !book.loadedSections.contains(section)) ||
+        (page == WorkspacePage.writing && activeChapter?.bodyLoaded == false);
+  }
+
+  void openStoryEvent(String id, {bool fromWriting = false}) {
+    requestedStoryEventId = id;
+    savePageSelection('story-tool-${activeBook?.id}', 0);
+    savePageSelection('story-view-${activeBook?.id}', 0);
+    if (fromWriting) {
+      openSubpage(WorkspacePage.timeline);
+    } else {
+      navigateBook(WorkspacePage.timeline);
+    }
+    notifyListeners();
+  }
 
   Book? get activeBook {
     for (final book in data.books) {
@@ -415,10 +502,11 @@ class AppController extends ChangeNotifier {
     _touchBook();
   }
 
-  void duplicateChapter(String chapterId) {
+  Future<void> duplicateChapter(String chapterId) async {
     final book = activeBook;
     final source = _chapterById(chapterId);
     if (book == null || source == null) return;
+    if (!source.bodyLoaded) await ensureChapterLoaded(book, source);
     final index = book.chapters.indexOf(source);
     var duplicatedBody = source.body;
     final duplicatedImages = <ChapterImage>[];
@@ -429,7 +517,12 @@ class AppController extends ChangeNotifier {
         'yejian-image:$newId',
       );
       duplicatedImages.add(
-        ChapterImage(id: newId, path: image.path, alt: image.alt),
+        ChapterImage(
+          id: newId,
+          path: image.path,
+          alt: image.alt,
+          widthFactor: image.widthFactor,
+        ),
       );
     }
     final copy = Chapter(
@@ -978,13 +1071,50 @@ class AppController extends ChangeNotifier {
   void updateChapterTitle(String value) {
     final chapter = activeChapter;
     if (chapter == null) return;
+    if (chapter.title == value) return;
     chapter.title = value;
+    chapter.updatedAt = DateTime.now();
     _touchBook();
+  }
+
+  void updateChapterSummary(String chapterId, String value) {
+    final chapter = _chapterById(chapterId);
+    if (chapter == null || chapter.summary == value.trim()) return;
+    chapter.summary = value.trim();
+    chapter.updatedAt = DateTime.now();
+    _touchBook();
+  }
+
+  void updateChapterImage(
+    String imageId, {
+    required String alt,
+    required double widthFactor,
+  }) {
+    final chapter = activeChapter;
+    if (chapter == null) return;
+    final image = chapter.images
+        .where((image) => image.id == imageId)
+        .firstOrNull;
+    if (image == null) return;
+    image.alt = alt.trim();
+    image.widthFactor = widthFactor.clamp(.1, 1);
+    final body = chapter.body.replaceAllMapped(
+      chapterImagePattern,
+      (match) =>
+          match.group(2) == imageId ? chapterImageReference(image) : match[0]!,
+    );
+    if (body != chapter.body) {
+      updateChapterBody(body);
+    } else {
+      chapter.updatedAt = DateTime.now();
+      _touchBook();
+    }
   }
 
   void updateChapterBody(String value) {
     final chapter = activeChapter;
     if (chapter == null) return;
+    if (!chapter.bodyLoaded) return;
     if (chapter.body == value) return;
     _relocateChapterMarkers(chapter.markers, chapter.body, value);
     chapter.body = value;
@@ -1205,6 +1335,7 @@ class AppController extends ChangeNotifier {
     }
     final name = '${_safeFileName(book.title)}.sns';
     try {
+      await ensureBookLoaded(book);
       await flush();
       if (saveState == SaveState.failed) {
         return const DocumentSaveResult.failed('作品尚未成功保存，暂不能导出工程');
@@ -1222,6 +1353,8 @@ class AppController extends ChangeNotifier {
       );
     } on ProjectArchiveException catch (error) {
       return DocumentSaveResult.failed(error.message);
+    } on Object {
+      return const DocumentSaveResult.failed('工程内容加载或导出失败，请重试');
     }
   }
 
@@ -1230,6 +1363,9 @@ class AppController extends ChangeNotifier {
       return const DocumentSaveResult.failed('书架中还没有作品');
     }
     try {
+      for (final book in data.books) {
+        await ensureBookLoaded(book);
+      }
       await flush();
       if (saveState == SaveState.failed) {
         return const DocumentSaveResult.failed('作品尚未成功保存，暂不能导出工程');
@@ -1247,6 +1383,8 @@ class AppController extends ChangeNotifier {
       );
     } on ProjectArchiveException catch (error) {
       return DocumentSaveResult.failed(error.message);
+    } on Object {
+      return const DocumentSaveResult.failed('工程内容加载或导出失败，请重试');
     }
   }
 
@@ -1268,7 +1406,7 @@ class AppController extends ChangeNotifier {
     if (await file.length() > ProjectArchive.maxArchiveBytes) {
       throw const ProjectArchiveException('工程文件超过 128 MB，拒绝导入');
     }
-    return ProjectArchive.decode(await file.readAsBytes(), fileName: file.name);
+    return compute(decodeProjectArchive, await file.readAsBytes());
   }
 
   Future<int> importProjectArchive(
@@ -1283,6 +1421,9 @@ class AppController extends ChangeNotifier {
     await flush();
     if (saveState == SaveState.failed) {
       throw const ProjectArchiveException('当前作品尚未成功保存，已取消导入');
+    }
+    for (final book in data.books) {
+      await ensureBookLoaded(book);
     }
     final candidate = LibraryData.fromJson(data.toJson());
     final createdAssets = <File>[];
@@ -1339,8 +1480,17 @@ class AppController extends ChangeNotifier {
       }
       rethrow;
     }
+    // The import transaction is already committed. A metadata reload failure
+    // must not leave the UI on the old library or remove committed assets.
     data = candidate;
-    selectedBookId = candidate.activeBookId;
+    if (store is SectionedDataStore) {
+      try {
+        data = await store.load();
+      } on Object {
+        // Retain the fully loaded, successfully saved library as a fallback.
+      }
+    }
+    selectedBookId = data.activeBookId;
     selectedChapterId = activeBook?.chapters.firstOrNull?.id;
     _pageHistory.clear();
     page = WorkspacePage.home;
@@ -1427,6 +1577,11 @@ class AppController extends ChangeNotifier {
     if (book == null) {
       return const DocumentSaveResult.failed('当前没有可导出的作品');
     }
+    try {
+      await ensureBookLoaded(book);
+    } on Object {
+      return const DocumentSaveResult.failed('作品内容加载失败，暂不能导出');
+    }
     final name = '${_safeFileName(book.title)}.txt';
     return documentSaver.save(
       bytes: Uint8List.fromList(utf8.encode(buildPlainText(book))),
@@ -1440,6 +1595,11 @@ class AppController extends ChangeNotifier {
     final book = activeBook;
     if (book == null) {
       return const DocumentSaveResult.failed('当前没有可导出的作品');
+    }
+    try {
+      await ensureBookLoaded(book);
+    } on Object {
+      return const DocumentSaveResult.failed('作品内容加载失败，暂不能导出');
     }
     final usedImages = <String, ChapterImage>{};
     for (final chapter in _exportableChapters(book)) {
@@ -1500,6 +1660,7 @@ class AppController extends ChangeNotifier {
   }
 
   void _queueSave() {
+    _dataRevision++;
     saveState = SaveState.saving;
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 800), _saveNow);
@@ -1507,15 +1668,29 @@ class AppController extends ChangeNotifier {
 
   Future<void> flush() async {
     _saveTimer?.cancel();
-    await _saveNow();
+    do {
+      await _saveNow();
+    } while (_savedRevision < _dataRevision && saveState != SaveState.failed);
   }
 
   Future<void> _saveNow() async {
+    while (_currentSave != null) {
+      await _currentSave;
+    }
+    final done = Completer<void>();
+    _currentSave = done.future;
+    final revision = _dataRevision;
     try {
       await store.save(data);
-      saveState = SaveState.saved;
+      _savedRevision = revision;
+      saveState = revision == _dataRevision
+          ? SaveState.saved
+          : SaveState.saving;
     } on Object {
       saveState = SaveState.failed;
+    } finally {
+      _currentSave = null;
+      done.complete();
     }
     if (!_disposed) notifyListeners();
   }
